@@ -45,20 +45,26 @@ def check_claude():
 
 
 def check_claude_login():
-    """Check if Claude CLI is working (logged in or ready to use)."""
+    """Check if Claude CLI is authenticated and working."""
     try:
-        # Just check if claude command responds
+        # Test with a simple command that requires authentication
+        # Using 'claude models' to verify actual login
         result = subprocess.run(
-            ["claude", "--version"],
+            ["claude", "models"],
             capture_output=True,
             text=True,
             timeout=5,
         )
         if result.returncode == 0:
-            return True, "Ready to use"
-        return False, "Not responding (try: claude login)"
-    except Exception:
-        return False, "Not responding (try: claude login)"
+            return True, "Authenticated & working"
+        elif "not authenticated" in result.stderr.lower() or "login" in result.stderr.lower():
+            return False, "Not logged in (run: claude login)"
+        else:
+            return False, "Auth check failed"
+    except FileNotFoundError:
+        return False, "Claude CLI not found"
+    except Exception as e:
+        return False, f"Auth check failed"
 
 
 def check_crm_tab():
