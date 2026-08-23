@@ -14,7 +14,11 @@ Brief (gather context) → Guide (AI walkthrough) → Solve (auto-implement)
 **Mac/Linux:** `./run.sh`  
 **Python:** `python -m streamlit run app/main.py`
 
-First run installs dependencies (~30 sec), then opens at `http://localhost:8501`.
+First run:
+1. Installs dependencies (~30 sec)
+2. Opens at `http://localhost:8501`
+3. Shows config wizard (enter API keys once, no CLI needed)
+4. Ready to automate!
 
 ## The Three Stages
 
@@ -34,8 +38,8 @@ Output: `case-solves/<number>/VERIFICATION_CHECKLIST.md`
 
 - Python 3.8+
 - Dynamics 365 CRM (with browser tab open)
-- Azure DevOps PAT in `AZDO_PAT` env var
-- Claude API key in `CLAUDE_API_KEY` env var
+- Azure DevOps PAT (enter in config wizard on first run)
+- Claude API key (enter in config wizard on first run)
 
 ## Configuration
 
