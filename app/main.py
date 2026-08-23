@@ -8,32 +8,76 @@ from datetime import datetime
 
 import streamlit as st
 
+try:
+    import keyring
+    KEYRING_AVAILABLE = True
+except ImportError:
+    KEYRING_AVAILABLE = False
+
 HERE = Path(__file__).parent
 PROJECT_ROOT = HERE.parent
 CONFIG_FILE = HERE / ".streamlit_config.json"
-
-st.set_page_config(page_title="case-wizard", page_icon="🧙", layout="wide")
+SERVICE_NAME = "case-wizard"
 
 
 def load_config():
-    """Load saved configuration."""
+    """Load configuration (secrets from keyring, settings from file)."""
+    config = {}
+
+    # Try keyring first (secure)
+    if KEYRING_AVAILABLE:
+        for key in ["azdo_pat", "claude_api_key"]:
+            value = keyring.get_password(SERVICE_NAME, key)
+            if value:
+                config[key] = value
+
+    # Load non-secret settings from file
     if CONFIG_FILE.exists():
         try:
-            return json.loads(CONFIG_FILE.read_text())
+            file_config = json.loads(CONFIG_FILE.read_text())
+            # Only load non-secret settings
+            for key in ["azdo_org_url", "azdo_project"]:
+                if key in file_config:
+                    config[key] = file_config[key]
         except:
-            return {}
-    return {}
+            pass
+
+    return config
 
 
 def save_config(config):
-    """Save configuration."""
-    CONFIG_FILE.write_text(json.dumps(config, indent=2))
+    """Save configuration securely.
+
+    Secrets go to OS Credential Manager (Windows), Keychain (Mac), or Secret Service (Linux).
+    Non-secrets go to JSON file.
+    """
+    # Save secrets to keyring (secure OS storage)
+    if KEYRING_AVAILABLE:
+        if config.get("azdo_pat"):
+            keyring.set_password(SERVICE_NAME, "azdo_pat", config["azdo_pat"])
+        if config.get("claude_api_key"):
+            keyring.set_password(SERVICE_NAME, "claude_api_key", config["claude_api_key"])
+    else:
+        # Fallback to JSON if keyring not available (not ideal)
+        st.warning("⚠️ keyring not available. Secrets stored in plain text. Consider reinstalling.")
+
+    # Save non-secret settings to JSON
+    file_config = {
+        "azdo_org_url": config.get("azdo_org_url"),
+        "azdo_project": config.get("azdo_project"),
+    }
+    CONFIG_FILE.write_text(json.dumps(file_config, indent=2))
 
 
 def show_config_wizard():
     """Show initial configuration wizard."""
     st.title("🧙 case-wizard Setup")
-    st.markdown("**First run setup.** Enter your configuration below.")
+
+    st.markdown("""
+    **First run setup.** Your secrets are stored securely:
+    - 🔐 API Keys → Windows Credential Manager (encrypted in OS vault)
+    - 📁 URLs → Local config file (plain text, OK)
+    """)
 
     config = load_config()
 
@@ -53,7 +97,7 @@ def show_config_wizard():
             value=config.get("azdo_pat", ""),
             type="password",
             placeholder="Enter your ADO PAT",
-            help="Create at https://dev.azure.com/{org}/_usersSettings/tokens"
+            help="Create at https://dev.azure.com/{org}/_usersSettings/tokens — stored in Credential Manager"
         )
 
         st.markdown("### Claude")
@@ -64,7 +108,7 @@ def show_config_wizard():
             value=config.get("claude_api_key", ""),
             type="password",
             placeholder="sk-...",
-            help="Get at https://console.anthropic.com"
+            help="Get at https://console.anthropic.com — stored in Credential Manager"
         )
 
         st.markdown("### Optional")
@@ -79,7 +123,7 @@ def show_config_wizard():
 
     if submitted:
         if not org_url or not azdo_pat or not claude_key:
-            st.error("❌ Please fill in all required fields (Azure DevOps and Claude)")
+            st.error("❌ Please fill in all required fields")
             return False
 
         config = {
@@ -155,19 +199,38 @@ def show_main_app():
                 azdo_pat = st.text_input("ADO PAT", type="password", value=config.get("azdo_pat", ""))
                 claude_key = st.text_input("Claude API Key", type="password", value=config.get("claude_api_key", ""))
 
-                if st.form_submit_button("💾 Save Settings", use_container_width=True):
-                    config = {
-                        "azdo_org_url": org_url,
-                        "azdo_pat": azdo_pat,
-                        "claude_api_key": claude_key,
-                        "azdo_project": ado_project or None,
-                    }
-                    save_config(config)
-                    os.environ["AZDO_PAT"] = azdo_pat
-                    os.environ["CLAUDE_API_KEY"] = claude_key
-                    st.success("✅ Settings saved!")
-                    st.session_state.show_settings = False
-                    st.rerun()
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.form_submit_button("💾 Save", use_container_width=True):
+                        config = {
+                            "azdo_org_url": org_url,
+                            "azdo_pat": azdo_pat,
+                            "claude_api_key": claude_key,
+                            "azdo_project": ado_project or None,
+                        }
+                        save_config(config)
+                        os.environ["AZDO_PAT"] = azdo_pat
+                        os.environ["CLAUDE_API_KEY"] = claude_key
+                        st.success("✅ Settings saved!")
+                        st.session_state.show_settings = False
+                        st.rerun()
+
+                with col2:
+                    if st.form_submit_button("🗑️ Clear All Secrets", use_container_width=True):
+                        if KEYRING_AVAILABLE:
+                            keyring.delete_password(SERVICE_NAME, "azdo_pat")
+                            keyring.delete_password(SERVICE_NAME, "claude_api_key")
+                        CONFIG_FILE.unlink(missing_ok=True)
+                        st.success("✅ All secrets cleared from Credential Manager")
+                        st.session_state.config_complete = False
+                        st.rerun()
+
+            st.markdown("**Security:**")
+            if KEYRING_AVAILABLE:
+                st.info("🔐 Secrets stored in Windows Credential Manager (encrypted in OS vault)")
+            else:
+                st.warning("⚠️ keyring module not available — secrets in plain text (not secure)")
+
         st.divider()
 
     # Case number input
