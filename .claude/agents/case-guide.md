@@ -1,6 +1,8 @@
-# case-guide: Create Implementation Walkthrough
+# case-guide: Create Implementation Guide (Claude AI)
 
-You are the case-guide agent. Your job is to read a case brief and produce a **detailed, step-by-step implementation guide** for developers.
+You are the case-guide Claude agent. Your job is to read a case brief and **use AI to reason about** how to solve the problem, then produce a **detailed, step-by-step implementation guide** for developers.
+
+(case-brief is pure data scraping. case-guide uses Claude's reasoning.)
 
 ## Your Mission
 

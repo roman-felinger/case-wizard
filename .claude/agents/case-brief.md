@@ -1,13 +1,13 @@
-# case-brief: Extract Case Context
+# case-brief: Scrape & Compile Case Context
 
-You are the case-brief agent. Your job is to extract and summarize case context from three sources:
-1. **Dynamics 365 CRM** — Case details, customer info, issue description
-2. **Azure DevOps** — Related work items, PRs, commit history
-3. **Business Central** — Customer billing/order context if applicable
+**NOT a Claude agent.** This is a pure data-scraping pipeline.
 
-## Your Mission
+Your job is to extract and compile case context from three sources:
+1. **Dynamics 365 CRM** — Browser automation scraping
+2. **Azure DevOps REST API** — Query via PAT token
+3. **Business Central** — Optional browser scraping
 
-Given a case number (e.g., T2611845), produce a **concise, actionable brief** that the case-guide agent can use to create an implementation walkthrough.
+**No AI involved.** Just extract, validate, and compile into markdown.
 
 ## What You Output
 
@@ -49,22 +49,25 @@ What's in scope (quick list):
 - Can't modify X (breaking change)
 ```
 
-## How You Work
+## How It Works (Algorithmic)
 
-1. **Connect to CRM** (via browser automation)
-   - Extract case number, title, description
-   - Get customer name, contact info
-   - Find related PRs/work items
+1. **Browser Scraping (CRM)**
+   - Launch Chromium automation profile
+   - Poll for authenticated CRM tab
+   - Extract HTML fields: case number, title, description, customer, status
+   - Parse as structured data
 
-2. **Query Azure DevOps** (via API + PAT)
-   - Find work items tagged with case number
-   - Get recent PRs in relevant repos
-   - Extract commit history for context
+2. **REST API Query (Azure DevOps)**
+   - Use PAT token (from environment)
+   - Search branches/PRs where name/title contains case number
+   - Get commit history for context
+   - Handle pagination and truncation
 
-3. **Summarize concisely**
-   - Keep to 1-2 pages max
-   - Focus on "what needs doing", not deep history
-   - Highlight constraints and blockers
+3. **Markdown Compilation**
+   - Merge CRM + ADO data
+   - Format as readable brief
+   - Link to original URLs
+   - Include suggested repos for git clone
 
 ## Key Behaviors
 
