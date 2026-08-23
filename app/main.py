@@ -364,17 +364,28 @@ def show_settings():
 
         with tab1:
             with st.form("normal_settings"):
+                st.markdown("**Dynamics 365**")
+                crm_url = st.text_input(
+                    "CRM URL",
+                    value=config.get("crm_url", "https://artex-crm.crm4.dynamics.com/"),
+                    help="Your organization's Dynamics 365 CRM URL"
+                )
+
+                st.markdown("**Azure DevOps**")
                 org_url = st.text_input(
-                    "Azure DevOps Org URL",
+                    "Organization URL",
                     value=config.get("azdo_org_url", ""),
+                    help="e.g., https://dev.azure.com/myorg"
                 )
 
                 azdo_pat = st.text_input(
-                    "ADO PAT",
+                    "Personal Access Token (PAT)",
                     value=config.get("azdo_pat", ""),
                     type="password",
+                    help="Stored securely in Windows Credential Manager"
                 )
 
+                st.markdown("**Behavior**")
                 open_vscode = st.checkbox(
                     "Open results in VS Code",
                     value=config.get("open_in_vscode", True),
@@ -384,6 +395,7 @@ def show_settings():
                 with col1:
                     if st.form_submit_button("💾 Save"):
                         config.update({
+                            "crm_url": crm_url,
                             "azdo_org_url": org_url,
                             "azdo_pat": azdo_pat,
                             "open_in_vscode": open_vscode,
@@ -627,13 +639,13 @@ def show_config_wizard():
     st.markdown("#### 🌐 Dynamics 365 CRM")
     st.caption("Keep a browser tab open with Dynamics 365 CRM (logged in)")
 
-    # Input for CRM URL
+    # Input for CRM URL (pre-filled with saved value)
     crm_url = st.text_input(
         "Your CRM URL",
-        value="https://artex-crm.crm4.dynamics.com/",
+        value=config.get("crm_url", "https://artex-crm.crm4.dynamics.com/"),
         placeholder="https://yourorg-crm.crm.dynamics.com/",
         key="crm_url_input",
-        help="Your organization's Dynamics 365 CRM URL (e.g., https://artex-crm.crm4.dynamics.com/)"
+        help="Your organization's Dynamics 365 CRM URL"
     )
 
     col1, col2 = st.columns([2, 1])
