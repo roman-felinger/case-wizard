@@ -550,63 +550,113 @@ def show_config_wizard():
         st.info("⏳ After fixing, press F5 to refresh and continue.")
         return
 
-    # Show warnings (but allow continuing)
-    if warnings:
-        with st.container(border=True):
-            st.warning("⚠️ **Warnings** (you can continue, but verify these)")
-            for check_name, message in warnings:
-                st.markdown(f"- **{check_name}:** {message}")
-
-    st.divider()
-
-    # Step 2: Configure Azure DevOps
-    st.markdown("### Step 2: Configure Azure DevOps")
-    st.markdown("**Enter your organization details:**")
+    # Step 2: Configure Missing Items
+    st.markdown("### Step 2: Configure Your Setup")
+    st.markdown("**Complete the following configuration:**")
 
     with st.form("config_form"):
-        org_url = st.text_input(
-            "Organization URL",
-            value=config.get("azdo_org_url", ""),
-            placeholder="https://dev.azure.com/yourorg",
-            help="Your Azure DevOps organization URL"
-        )
+        # CRM Login Section
+        st.markdown("#### 🌐 Dynamics 365 CRM")
+        st.caption("Keep a browser tab open with Dynamics 365 CRM (logged in)")
 
-        azdo_pat = st.text_input(
-            "Personal Access Token (PAT)",
-            value=config.get("azdo_pat", ""),
-            type="password",
-            placeholder="Paste your PAT",
-            help="Token with Code (Read) and Project and Team (Read) scopes"
-        )
-
-        st.markdown("**Where to get these:**")
-        st.caption("""
-        1. Organization URL: https://dev.azure.com/{yourorg}
-        2. PAT: https://dev.azure.com/{yourorg}/_usersSettings/tokens
-           - Click "New Token"
-           - Scopes: Code (Read) + Project and Team (Read)
-        """)
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.form_submit_button("🔗 Open CRM", use_container_width=True):
+                import webbrowser
+                webbrowser.open("https://apps.dynamics.com")
+                st.info("✓ Opening Dynamics 365 in browser...")
+        with col2:
+            st.caption(" ")
+        with col3:
+            crm_ready = st.checkbox(
+                "✅ Logged in to CRM",
+                value=False,
+                key="crm_checkbox",
+                help="Check after opening CRM and signing in"
+            )
 
         st.divider()
 
+        # Azure DevOps Section
+        st.markdown("#### 🔑 Azure DevOps Access")
+        st.caption("Your organization URL and personal access token")
+
+        org_url = st.text_input(
+            "Organization URL",
+            value=config.get("azdo_org_url", ""),
+            placeholder="https://dev.azure.com/myorg",
+            key="org_url_input",
+            help="Your Azure DevOps organization (e.g., https://dev.azure.com/contoso)"
+        )
+
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            azdo_pat = st.text_input(
+                "Personal Access Token (PAT)",
+                value=config.get("azdo_pat", ""),
+                type="password",
+                key="pat_input",
+                placeholder="Paste your PAT here",
+                help="Token with Code (Read) and Project and Team (Read) scopes. Never share!"
+            )
+        with col2:
+            st.caption(" ")
+            if st.form_submit_button("ℹ️ How?", use_container_width=True, help="Show PAT creation steps"):
+                with st.expander("Create PAT", expanded=True):
+                    st.markdown("""
+                    1. Go to: https://dev.azure.com/{org}/_usersSettings/tokens
+                    2. Click **New Token**
+                    3. Name: `case-wizard`
+                    4. Scopes: ✅ Code (Read), ✅ Project and Team (Read)
+                    5. Copy and paste above
+                    """)
+
+        st.divider()
+
+        # Show warnings that need attention
+        if warnings:
+            st.markdown("#### ⚠️ Warnings")
+            for check_name, message in warnings:
+                st.markdown(f"- **{check_name}:** {message}")
+
+        st.divider()
+
+        # Submit buttons
         col1, col2 = st.columns(2)
         with col1:
-            if st.form_submit_button("✅ Complete Setup", type="primary", use_container_width=True):
-                if not org_url or not azdo_pat:
-                    st.error("Please fill in all required fields")
-                    return
-
-                config = {
-                    "azdo_org_url": org_url,
-                    "azdo_pat": azdo_pat,
-                }
-                config.update(DEFAULTS)
-                save_config(config)
-                st.session_state.config_complete = True
-                st.rerun()
-
+            submit = st.form_submit_button(
+                "✅ Complete Setup",
+                type="primary",
+                use_container_width=True
+            )
         with col2:
-            st.button("❌ Exit", disabled=True, use_container_width=True)
+            st.button("❌ Exit Setup", disabled=True, use_container_width=True)
+
+        # Process form submission
+        if submit:
+            errors = []
+
+            if not org_url:
+                errors.append("Azure DevOps Organization URL is required")
+            if not azdo_pat:
+                errors.append("Personal Access Token is required")
+            if not st.session_state.get("crm_checkbox", False):
+                errors.append("Please confirm you have Dynamics 365 CRM tab open and logged in")
+
+            if errors:
+                st.error("**Please fix these before continuing:**\n" + "\n".join(f"- {e}" for e in errors))
+            else:
+                # Save configuration
+                new_config = dict(DEFAULTS)
+                new_config["azdo_org_url"] = org_url
+                new_config["azdo_pat"] = azdo_pat
+                save_config(new_config)
+
+                st.success("✅ Setup complete! Restarting app...")
+                st.session_state.config_complete = True
+                import time
+                time.sleep(1)
+                st.rerun()
 
     # Summary
     st.divider()

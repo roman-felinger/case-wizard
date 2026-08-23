@@ -1,5 +1,6 @@
 """Configuration and settings management for case-wizard."""
 import json
+import os
 from pathlib import Path
 
 try:

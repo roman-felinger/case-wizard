@@ -73,10 +73,10 @@ def check_claude_login():
 
 
 def check_crm_tab():
-    """Check if CRM tab might be open (heuristic)."""
-    # This is hard to check directly without browser integration
-    # Return as warning (user needs to verify)
-    return None, "Please verify: Dynamics 365 tab open + logged in"
+    """Check if CRM tab is accessible and logged in."""
+    # This is hard to check without browser automation
+    # Return as warning but note it's critical
+    return None, "Requires: Dynamics 365 browser tab (open + logged in)"
 
 
 def check_config(config):
