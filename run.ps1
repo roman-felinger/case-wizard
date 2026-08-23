@@ -17,9 +17,15 @@ try {
     Write-Host "Activating virtual environment..." -ForegroundColor Yellow
     .\.venv\Scripts\Activate.ps1
 
-    Write-Host "Installing dependencies..." -ForegroundColor Yellow
-    pip install -r requirements.txt
-    Write-Host "✓ Dependencies installed" -ForegroundColor Green
+    # Only install if first run (marker file doesn't exist)
+    if (-not (Test-Path ".venv\.pip-installed")) {
+        Write-Host "Installing dependencies (first run)..." -ForegroundColor Yellow
+        pip install -q -r requirements.txt
+        New-Item -Path ".venv\.pip-installed" -ItemType File -Force | Out-Null
+        Write-Host "✓ Dependencies installed" -ForegroundColor Green
+    } else {
+        Write-Host "Using cached dependencies..." -ForegroundColor Cyan
+    }
 
     Write-Host "Starting case-wizard..." -ForegroundColor Yellow
     python -m streamlit run app/main.py

@@ -16,9 +16,15 @@ fi
 echo "Activating virtual environment..."
 source .venv/bin/activate
 
-echo "Installing dependencies..."
-pip install -r requirements.txt
-echo "✓ Dependencies installed"
+# Only install if first run (marker file doesn't exist)
+if [ ! -f ".venv/.pip-installed" ]; then
+    echo "Installing dependencies (first run)..."
+    pip install -q -r requirements.txt
+    touch .venv/.pip-installed
+    echo "✓ Dependencies installed"
+else
+    echo "Using cached dependencies..."
+fi
 
 echo "Starting case-wizard..."
 python -m streamlit run app/main.py
