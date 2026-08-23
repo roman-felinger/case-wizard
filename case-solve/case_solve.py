@@ -198,6 +198,45 @@ def prompt_for_repo(suggested_repo=None):
             print("Repo URL required.")
 
 
+def extract_repo_name(repo_url):
+    """Extract repo name from URL."""
+    # GitHub: https://github.com/org/repo → repo
+    # ADO: https://dev.azure.com/org/project/_git/repo → repo
+    # GitLab: https://gitlab.com/org/repo → repo
+    return repo_url.rstrip("/").split("/")[-1].replace(".git", "")
+
+
+def confirm_before_implementing(case_number, repo_url, branch_name):
+    """Show details and confirm before making changes."""
+    repo_name = extract_repo_name(repo_url)
+
+    print("\n" + "=" * 70)
+    print("CONFIRMATION REQUIRED")
+    print("=" * 70)
+    print(f"\nAbout to make changes to your repository:")
+    print(f"  Repository: {repo_name}")
+    print(f"  Clone URL:  {repo_url}")
+    print(f"  Branch:     {branch_name}")
+    print(f"\nActions that will be performed:")
+    print(f"  1. Clone repository (or fetch if cached)")
+    print(f"  2. Create branch: {branch_name}")
+    print(f"  3. Install dependencies")
+    print(f"  4. Apply changes from guide")
+    print(f"  5. Run tests/lint/build (if enabled)")
+    print(f"  6. Create commits")
+    print(f"\nYou can review changes before pushing.\n")
+
+    while True:
+        response = input("Proceed with implementation? (yes/no): ").strip().lower()
+        if response in ["yes", "y"]:
+            return True
+        elif response in ["no", "n"]:
+            print("Cancelled.")
+            return False
+        else:
+            print("Please enter 'yes' or 'no'.")
+
+
 def build_parser():
     """Build and return ArgumentParser."""
     parser = argparse.ArgumentParser(
@@ -312,6 +351,11 @@ def main():
     else:
         repo_url = args.repo
     print(f"✓ Using repo: {repo_url}")
+
+    # Confirm before making changes
+    branch_name = f"case/{args.case_number}"
+    if not confirm_before_implementing(args.case_number, repo_url, branch_name):
+        return 1  # User cancelled
 
     # Import heavy modules here (after arg parsing, config loading)
     from lib.workspace import WorkspaceManager
