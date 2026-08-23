@@ -677,14 +677,13 @@ def show_config_wizard():
                 st.markdown("⚠️")
 
     # For form validation, check if CRM was verified
-    crm_ready = st.session_state.get("crm_login_status", (None, None))[0] is True
+    crm_status = st.session_state.get("crm_login_status")
+    crm_ready = crm_status[0] is True if crm_status else False
 
     st.divider()
 
     # Configuration form for ADO and other settings
     with st.form("config_form"):
-        # Store CRM status from checkbox
-        crm_ready = st.session_state.get("crm_checkbox", False)
 
         # Azure DevOps Section
         st.markdown("#### 🔑 Azure DevOps Access")
@@ -755,7 +754,8 @@ def show_config_wizard():
                 st.error(message)
 
         # For form validation
-        azdo_verified = st.session_state.get("azdo_status", (None, None))[0] is True
+        azdo_status = st.session_state.get("azdo_status")
+        azdo_verified = azdo_status[0] is True if azdo_status else False
 
         st.divider()
 
