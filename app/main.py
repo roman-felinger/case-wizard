@@ -57,25 +57,21 @@ def show_help():
 
             st.divider()
             st.markdown("""
-            ### Setup Instructions
+            ### Setup (2 minutes)
 
-            **Install Claude Code**
-            ```
-            https://claude.com/claude-code
-            ```
+            1. **Install Claude Code**
+               https://claude.com/claude-code
 
-            **Log in to Claude**
-            ```bash
-            claude login
-            ```
+            2. **Log in:** `claude login`
 
-            **Create Azure DevOps PAT**
-            - Go: https://dev.azure.com/{org}/_usersSettings/tokens
-            - Scopes: Code (Read), Project and Team (Read)
+            3. **Create Azure DevOps PAT**
+               https://dev.azure.com/{org}/_usersSettings/tokens
+               Scopes: Code (Read), Project and Team (Read)
 
-            **Open CRM Browser Tab**
-            - Log in to Dynamics 365
-            - Keep tab open while running
+            4. **Open Dynamics 365 CRM**
+               Keep tab open and logged in
+
+            **Project auto-detected** from repo/case context
             """)
 
         with tab2:
@@ -161,13 +157,9 @@ def show_stage_tab(stage_id, stage_name, stage_emoji, description, cmd_name, ski
         st.markdown("### Parameters")
 
         if stage_id == "brief":
-            col1, col2 = st.columns(2)
-            with col1:
-                st.caption("**ADO Organization**")
-                st.caption(config.get("azdo_org_url", "Not set"))
-            with col2:
-                st.caption("**ADO Project**")
-                st.caption(config.get("azdo_project", "All projects"))
+            st.caption("**ADO Organization**")
+            st.caption(config.get("azdo_org_url", "Not set"))
+            st.caption("*Auto-detects project from context*")
 
         elif stage_id == "guide":
             col1, col2 = st.columns(2)
@@ -308,11 +300,6 @@ def show_settings():
                     value=config.get("azdo_org_url", ""),
                 )
 
-                ado_project = st.text_input(
-                    "Project (optional)",
-                    value=config.get("azdo_project", "") or "",
-                )
-
                 azdo_pat = st.text_input(
                     "ADO PAT",
                     value=config.get("azdo_pat", ""),
@@ -329,7 +316,6 @@ def show_settings():
                     if st.form_submit_button("💾 Save"):
                         config.update({
                             "azdo_org_url": org_url,
-                            "azdo_project": ado_project or None,
                             "azdo_pat": azdo_pat,
                             "open_in_vscode": open_vscode,
                         })
@@ -520,11 +506,6 @@ def show_config_wizard():
             placeholder="Create at dev.azure.com",
         )
 
-        ado_project = st.text_input(
-            "Project (optional)",
-            value=config.get("azdo_project", "") or "",
-        )
-
         if st.form_submit_button("✅ Continue", type="primary", use_container_width=True):
             if not org_url or not azdo_pat:
                 st.error("Please fill in required fields")
@@ -533,7 +514,6 @@ def show_config_wizard():
             config = {
                 "azdo_org_url": org_url,
                 "azdo_pat": azdo_pat,
-                "azdo_project": ado_project or None,
             }
             config.update(DEFAULTS)
             save_config(config)
@@ -548,7 +528,7 @@ if st.session_state.get("config_complete") is None:
     config = load_config()
     st.session_state.config_complete = bool(
         config.get("azdo_pat") and config.get("azdo_org_url")
-    )
+    )  # Project auto-detected from context
 
 if not st.session_state.get("config_complete"):
     show_config_wizard()

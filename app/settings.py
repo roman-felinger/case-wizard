@@ -19,7 +19,6 @@ DEFAULTS = {
 
     # Normal settings
     "azdo_org_url": None,
-    "azdo_project": None,
     "open_in_vscode": True,
 
     # Advanced settings (defaults optimized for speed)
