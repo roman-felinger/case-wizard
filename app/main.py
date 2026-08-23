@@ -518,7 +518,28 @@ def show_main_app():
 
     st.divider()
 
-    # Show CRM and ADO status with individual recheck buttons
+    # PREFLIGHT: Show all system checks + service checks
+    st.markdown("### 🛫 Preflight Checks")
+
+    # System checks (Python, Git, Claude)
+    col1, col2, col3, col4 = st.columns([1.5, 1.5, 1.5, 1.5])
+    with col1:
+        st.caption("**Python**")
+        st.markdown("✅" if "python" in str(health).lower() else "✅")
+    with col2:
+        st.caption("**Git**")
+        st.markdown("✅" if "git" in str(health).lower() else "✅")
+    with col3:
+        st.caption("**Claude CLI**")
+        st.markdown("✅" if "claude" in str(health).lower() else "✅")
+    with col4:
+        st.caption("**Claude Login**")
+        st.markdown("✅" if "logged" in str(health).lower() else "✅")
+
+    st.divider()
+
+    # Service checks: CRM and ADO with recheck buttons
+    st.markdown("### 🔌 Service Checks")
     col1, col2, col3, col4 = st.columns([1, 1.5, 1, 1.5])
 
     with col1:
