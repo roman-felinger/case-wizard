@@ -30,14 +30,6 @@ def save_config(config):
     CONFIG_FILE.write_text(json.dumps(config, indent=2))
 
 
-def check_env_var(key, config_key):
-    """Check if env var or config has a value."""
-    if os.environ.get(key):
-        return True
-    config = load_config()
-    return bool(config.get(config_key))
-
-
 def show_config_wizard():
     """Show initial configuration wizard."""
     st.title("🧙 case-wizard Setup")
@@ -109,59 +101,49 @@ def show_config_wizard():
 
 
 def run_stage_with_env(stage_id, stage_name, cmd_args, cwd, env):
-    """Run a stage with environment variables."""
-    container = st.container(border=True)
-    with container:
-        col_status, col_time = st.columns([3, 1])
-        with col_status:
-            st.markdown(f"#### {stage_name}")
+    """Run a stage and return success/failure."""
+    try:
+        result = subprocess.run(
+            [sys.executable] + cmd_args,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=600,
+            env=env,
+        )
 
-        status_ph = st.empty()
-        progress_ph = st.empty()
-        output_ph = st.empty()
+        if result.returncode == 0:
+            return True, result.stdout
+        else:
+            return False, result.stderr
+    except subprocess.TimeoutExpired:
+        return False, "Timeout (600 seconds exceeded)"
+    except Exception as e:
+        return False, str(e)
 
-        status_ph.markdown("🔄 Running...")
-        progress_ph.progress(0.5)
 
-        try:
-            result = subprocess.run(
-                [sys.executable] + cmd_args,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=600,
-                env=env,
-            )
+def get_stage_status(case_num):
+    """Check if output files exist for each stage."""
+    brief_file = PROJECT_ROOT / "case-brief" / "case-briefs" / f"case-{case_num}.md"
+    guide_file = PROJECT_ROOT / "case-guide" / "case-guides" / f"case-{case_num}-for-dummies.md"
+    solve_dir = PROJECT_ROOT / "case-solve" / "case-solves" / f"case-{case_num}"
 
-            if result.returncode == 0:
-                status_ph.markdown("✅ Complete")
-                progress_ph.progress(1.0)
-                if result.stdout:
-                    with output_ph.expander("📋 Output"):
-                        st.code(result.stdout, language="text")
-                return True
-            else:
-                status_ph.markdown("❌ Error")
-                with output_ph.expander("📋 Error"):
-                    st.code(result.stderr, language="text")
-                return False
-        except subprocess.TimeoutExpired:
-            status_ph.markdown("❌ Timeout")
-            return False
-        except Exception as e:
-            status_ph.markdown(f"❌ Error: {str(e)}")
-            return False
+    return {
+        "brief": brief_file.exists(),
+        "guide": guide_file.exists(),
+        "solve": solve_dir.exists(),
+    }
 
 
 def show_main_app():
     """Show main workflow interface."""
     st.title("🧙 case-wizard")
-    st.caption("Gather → Guide → Solve. Three stages of case automation.")
+    st.caption("Three-stage case automation: Brief → Guide → Solve")
 
-    # Settings button
-    col1, col2 = st.columns([4, 1])
+    # Settings button in top right
+    col1, col2 = st.columns([5, 1])
     with col2:
-        if st.button("⚙️ Settings", use_container_width=True):
+        if st.button("⚙️", use_container_width=True, help="Edit settings"):
             st.session_state.show_settings = not st.session_state.get("show_settings", False)
 
     if st.session_state.get("show_settings"):
@@ -186,84 +168,250 @@ def show_main_app():
                     st.success("✅ Settings saved!")
                     st.session_state.show_settings = False
                     st.rerun()
+        st.divider()
 
-    # Main workflow
+    # Case number input
     with st.container():
-        st.markdown("### Start a Case")
-        case_number = st.text_input(
-            "Case Number", placeholder="T2611845", label_visibility="collapsed"
-        ).upper().strip()
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            case_number = st.text_input(
+                "Case Number",
+                placeholder="T2611845",
+                label_visibility="collapsed",
+                key="case_input"
+            ).upper().strip()
+        with col2:
+            if st.button("🔄 Clear", use_container_width=True):
+                st.session_state.clear()
+                st.rerun()
 
-        if not case_number:
-            st.info("Enter a case number (e.g., T2611845) and click Start")
-            st.stop()
+    if not case_number:
+        st.info("📋 Enter a case number to start")
+        st.stop()
 
-        col_start, col_clear = st.columns(2)
-        with col_start:
-            start_button = st.button("▶ Start", use_container_width=True, type="primary")
-        with col_clear:
-            clear_button = st.button("🔄 Clear", use_container_width=True)
+    # Initialize session state for this case
+    if st.session_state.get("current_case") != case_number:
+        st.session_state.current_case = case_number
+        st.session_state.stage_results = {}
 
-        if clear_button:
-            st.session_state.clear()
-            st.rerun()
+    st.divider()
 
-    if "workflow_started" not in st.session_state:
-        st.session_state.workflow_started = False
+    # Get status of existing outputs
+    status = get_stage_status(case_number)
 
-    if start_button:
-        st.session_state.workflow_started = True
-        st.session_state.case_number = case_number
-        st.session_state.start_time = datetime.now()
+    # Build environment
+    config = load_config()
+    env = os.environ.copy()
+    env["AZDO_PAT"] = config.get("azdo_pat", "")
+    env["CLAUDE_API_KEY"] = config.get("claude_api_key", "")
+    if config.get("azdo_org_url"):
+        env["AZDO_ORG_URL"] = config.get("azdo_org_url")
+    if config.get("azdo_project"):
+        env["AZDO_PROJECT"] = config.get("azdo_project")
 
-    if st.session_state.workflow_started:
-        case_num = st.session_state.case_number
-        config = load_config()
+    # Define stages
+    stages = [
+        {
+            "id": "brief",
+            "name": "Gather Brief",
+            "emoji": "📋",
+            "description": "Pull context from CRM, Azure DevOps, Business Central",
+            "cmd": ["case_brief.py", case_number, "--no-open"],
+            "cwd": PROJECT_ROOT / "case-brief",
+        },
+        {
+            "id": "guide",
+            "name": "Generate Guide",
+            "emoji": "📖",
+            "description": "Create step-by-step implementation walkthrough (Claude)",
+            "cmd": ["case_guide.py", case_number, "--no-open"],
+            "cwd": PROJECT_ROOT / "case-guide",
+        },
+        {
+            "id": "solve",
+            "name": "Auto-Implement",
+            "emoji": "⚙️",
+            "description": "Auto-apply changes, run tests, create commits",
+            "cmd": ["case_solve.py", case_number],
+            "cwd": PROJECT_ROOT / "case-solve",
+        },
+    ]
 
-        # Build environment with config
-        env = os.environ.copy()
-        env["AZDO_PAT"] = config.get("azdo_pat", "")
-        env["CLAUDE_API_KEY"] = config.get("claude_api_key", "")
-        if config.get("azdo_org_url"):
-            env["AZDO_ORG_URL"] = config.get("azdo_org_url")
-        if config.get("azdo_project"):
-            env["AZDO_PROJECT"] = config.get("azdo_project")
+    # Show checklist header
+    st.markdown(f"### Pipeline for Case `{case_number}`")
 
-        st.markdown("### Pipeline Status")
+    # Checklist section
+    with st.container(border=True):
+        # Overall status
+        completed = sum(1 for s in status.values() if s)
+        total = len(status)
 
-        stages = [
-            ("brief", "📋 Gather Brief", ["case_brief.py", case_num, "--no-open"]),
-            ("guide", "📖 Generate Guide", ["case_guide.py", case_num, "--no-open"]),
-            ("solve", "⚙️ Auto-Implement", ["case_solve.py", case_num]),
-        ]
+        col1, col2, col3 = st.columns([2, 1, 2])
+        with col1:
+            st.markdown("**Progress**")
+        with col2:
+            st.metric("", f"{completed}/{total}")
+        with col3:
+            if completed == total:
+                st.success("✅ All stages complete!")
+            elif completed > 0:
+                st.info(f"⏳ {total - completed} stage(s) remaining")
+            else:
+                st.warning("🚀 Ready to start")
 
-        stage_dirs = {
-            "brief": PROJECT_ROOT / "case-brief",
-            "guide": PROJECT_ROOT / "case-guide",
-            "solve": PROJECT_ROOT / "case-solve",
-        }
+        st.divider()
 
-        if "workflow_thread" not in st.session_state:
-            def run_workflow():
-                try:
-                    for stage_id, stage_name, cmd_args in stages:
-                        success = run_stage_with_env(
-                            stage_id, stage_name, cmd_args,
-                            cwd=stage_dirs[stage_id],
-                            env=env,
-                        )
-                        if not success:
-                            break
+        # Stages checklist with individual controls
+        for i, stage in enumerate(stages, 1):
+            stage_id = stage["id"]
+            is_done = status[stage_id]
+            is_running = st.session_state.stage_results.get(f"{stage_id}_running", False)
+
+            # Checklist item
+            col1, col2, col3 = st.columns([0.5, 3, 2])
+
+            with col1:
+                if is_done:
+                    st.markdown("✅")
+                elif is_running:
+                    st.markdown("🔄")
+                else:
+                    st.markdown(f"{i}️⃣")
+
+            with col2:
+                st.markdown(f"**{stage['emoji']} {stage['name']}**")
+                st.caption(stage["description"])
+
+            with col3:
+                # Run button for individual stage
+                if st.button(
+                    f"▶ Run {stage['name']}",
+                    key=f"btn_{stage_id}",
+                    use_container_width=True,
+                    type="secondary" if not is_done else "secondary"
+                ):
+                    st.session_state.stage_results[f"{stage_id}_running"] = True
+                    success, output = run_stage_with_env(
+                        stage_id,
+                        stage["name"],
+                        stage["cmd"],
+                        stage["cwd"],
+                        env,
+                    )
+
+                    if success:
+                        st.session_state.stage_results[stage_id] = "success"
+                        st.session_state.stage_results[f"{stage_id}_running"] = False
+                        st.success(f"✅ {stage['name']} complete!")
+                        st.rerun()
                     else:
-                        st.success("✅ Workflow complete!")
-                except Exception as e:
-                    st.error(f"Error: {e}")
+                        st.session_state.stage_results[stage_id] = "error"
+                        st.session_state.stage_results[f"{stage_id}_running"] = False
+                        st.error(f"❌ {stage['name']} failed")
+                        with st.expander("📋 Error details"):
+                            st.code(output, language="text")
+                        st.stop()
 
-            import threading
-            thread = threading.Thread(target=run_workflow, daemon=True)
-            thread.start()
-            st.session_state.workflow_thread = thread
-            st.rerun()
+            # Show output if it exists and is running/completed
+            if st.session_state.stage_results.get(stage_id) == "success":
+                with st.expander(f"ℹ️ {stage['name']} output"):
+                    st.success("Stage completed successfully")
+                    if st.session_state.stage_results.get(f"{stage_id}_output"):
+                        st.code(st.session_state.stage_results.get(f"{stage_id}_output"), language="text")
+
+            if i < len(stages):
+                st.divider()
+
+    # Run all button
+    st.divider()
+    col1, col2, col3 = st.columns([1, 1, 2])
+
+    with col1:
+        if st.button("▶ Run All Stages", type="primary", use_container_width=True):
+            st.session_state.run_all = True
+
+    with col2:
+        if st.button("⏭️ Skip to Solve", use_container_width=True):
+            st.session_state.run_solve_only = True
+
+    # Run all pipeline if requested
+    if st.session_state.get("run_all"):
+        st.markdown("### Running Full Pipeline...")
+        for stage in stages:
+            with st.container(border=True):
+                col1, col2 = st.columns([1, 4])
+                with col1:
+                    st.markdown(stage["emoji"])
+                with col2:
+                    st.markdown(f"**{stage['name']}**")
+
+                status_ph = st.empty()
+                progress_ph = st.empty()
+                output_ph = st.empty()
+
+                status_ph.markdown("🔄 Running...")
+                progress_ph.progress(0.5)
+
+                success, output = run_stage_with_env(
+                    stage["id"],
+                    stage["name"],
+                    stage["cmd"],
+                    stage["cwd"],
+                    env,
+                )
+
+                if success:
+                    status_ph.markdown("✅ Complete")
+                    progress_ph.progress(1.0)
+                    if output:
+                        with output_ph.expander("📋 Output"):
+                            st.code(output, language="text")
+                else:
+                    status_ph.markdown("❌ Error")
+                    with output_ph.expander("📋 Error"):
+                        st.code(output, language="text")
+                    st.error("Pipeline stopped due to error")
+                    st.session_state.run_all = False
+                    st.stop()
+
+        st.success("🎉 Full pipeline complete!")
+        st.session_state.run_all = False
+        st.rerun()
+
+    # Run solve only if requested
+    if st.session_state.get("run_solve_only"):
+        solve_stage = stages[2]
+        st.markdown("### Running Solve Stage Only...")
+        with st.container(border=True):
+            st.markdown(f"**{solve_stage['emoji']} {solve_stage['name']}**")
+
+            status_ph = st.empty()
+            progress_ph = st.progress(0.5)
+
+            status_ph.markdown("🔄 Running...")
+
+            success, output = run_stage_with_env(
+                solve_stage["id"],
+                solve_stage["name"],
+                solve_stage["cmd"],
+                solve_stage["cwd"],
+                env,
+            )
+
+            if success:
+                status_ph.markdown("✅ Complete")
+                progress_ph.progress(1.0)
+                st.success("Solve stage complete!")
+                if output:
+                    with st.expander("📋 Output"):
+                        st.code(output, language="text")
+            else:
+                status_ph.markdown("❌ Error")
+                st.error("Solve stage failed")
+                with st.expander("📋 Error"):
+                    st.code(output, language="text")
+
+        st.session_state.run_solve_only = False
 
 
 # Main logic
