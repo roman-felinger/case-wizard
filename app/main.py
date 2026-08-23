@@ -623,28 +623,32 @@ def show_config_wizard():
     st.markdown("### Step 2: Configure Your Setup")
     st.markdown("**Complete the following configuration:**")
 
+    # CRM Login Section (outside form, so button works)
+    st.markdown("#### 🌐 Dynamics 365 CRM")
+    st.caption("Keep a browser tab open with Dynamics 365 CRM (logged in)")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("🔗 Open CRM", use_container_width=True, key="open_crm_btn"):
+            import webbrowser
+            webbrowser.open("https://apps.dynamics.com")
+            st.success("✓ Opening Dynamics 365 in your browser... Log in and keep the tab open")
+    with col2:
+        st.caption(" ")
+    with col3:
+        crm_ready_check = st.checkbox(
+            "✅ Logged in to CRM",
+            value=False,
+            key="crm_checkbox",
+            help="Check this after opening CRM and signing in"
+        )
+
+    st.divider()
+
+    # Configuration form for ADO and other settings
     with st.form("config_form"):
-        # CRM Login Section
-        st.markdown("#### 🌐 Dynamics 365 CRM")
-        st.caption("Keep a browser tab open with Dynamics 365 CRM (logged in)")
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            if st.form_submit_button("🔗 Open CRM", use_container_width=True):
-                import webbrowser
-                webbrowser.open("https://apps.dynamics.com")
-                st.info("✓ Opening Dynamics 365 in browser...")
-        with col2:
-            st.caption(" ")
-        with col3:
-            crm_ready = st.checkbox(
-                "✅ Logged in to CRM",
-                value=False,
-                key="crm_checkbox",
-                help="Check after opening CRM and signing in"
-            )
-
-        st.divider()
+        # Store CRM status from checkbox
+        crm_ready = st.session_state.get("crm_checkbox", False)
 
         # Azure DevOps Section
         st.markdown("#### 🔑 Azure DevOps Access")
