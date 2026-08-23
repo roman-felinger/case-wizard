@@ -1,0 +1,401 @@
+#!/usr/bin/env python3
+"""
+case-solve: Read a case guide, implement the changes automatically.
+
+Workflow: case-brief → case-guide → case-solve
+  1. case-brief gathers case context (CRM, ADO, BC) into a markdown brief
+  2. case-guide reads the brief, asks Claude for a walkthrough
+  3. case-solve reads the guide, clones the repo, implements changes on a branch
+
+Each run:
+  - Reads the guide already written by case-guide
+  - Prompts for repo URL (suggests from guide/config, but you can override)
+  - Clones repo (or uses cached clone) and creates a case-specific branch
+  - Installs dependencies (pip, npm, dotnet, cargo as detected)
+  - Uses Claude to guide implementation step-by-step, applying changes
+  - Runs tests, lint, build checks (auto-detects available tools)
+  - Creates logical git commits (one per logical change)
+  - Outputs a verification checklist for manual steps
+  - Generates a summary report
+
+Output lands in case-solves/<case-code>/ with the cloned repo, branch info,
+and a verification checklist for the developer to review before pushing.
+
+Usage:
+  python case_solve.py T2611845                    # Full run, prompts for repo
+  python case_solve.py T2611845 --repo https://... # Override repo URL
+  python case_solve.py T2611845 --no-implement     # Stop after branch creation
+  python case_solve.py T2611845 --show-plan        # Show implementation plan, don't apply
+  python case_solve.py -h                          # All flags
+"""
+
+import argparse
+import copy
+import json
+import os
+import shutil
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
+HERE = Path(__file__).parent
+CONFIG_PATH = HERE / "config.json"
+GUIDE_DIR = HERE.parent / "case-guide" / "case-guides"
+SOLVES_DIR = HERE / "case-solves"
+
+# Default configuration
+DEFAULTS = {
+    "guide_dir": str(GUIDE_DIR),
+    "solves_dir": str(SOLVES_DIR),
+    "open_in_vscode": True,
+    "auto_commit": True,
+    "run_tests": True,
+    "run_lint": True,
+    "run_build": True,
+    "github_base": None,  # e.g., "https://github.com/myorg" for opening PRs
+    "azure_devops": {
+        "org_url": None,  # Parsed from guide if present
+        "pat_env_var": "AZDO_PAT",
+    },
+    "claude": {
+        "model": None,
+        "agent": "case-solver",
+        "timeout": 900,  # 15 minutes for implementation
+        "extra_args": [],
+    },
+    "customer_repo_map": [],  # List of {customer_contains, project, repo}
+}
+
+
+def _deep_merge(base, override):
+    """Deep merge override dict into base, modifying base in place."""
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def _strip_comments(cfg):
+    """Remove all keys starting with underscore (documentation)."""
+    if not isinstance(cfg, dict):
+        return cfg
+    return {k: _strip_comments(v) for k, v in cfg.items() if not k.startswith("_")}
+
+
+def load_config(path=None):
+    """Load config.json if it exists, deep-merge into DEFAULTS."""
+    path = path or CONFIG_PATH
+    cfg = copy.deepcopy(DEFAULTS)
+    if path.exists():
+        with open(path, "r", encoding="utf-8") as f:
+            _deep_merge(cfg, json.load(f))
+        cfg = _strip_comments(cfg)
+    return cfg
+
+
+def apply_cli_overrides(cfg, args):
+    """Apply CLI flag overrides to config."""
+    if args.repo:
+        cfg["repo"] = args.repo
+    if args.guide_dir:
+        cfg["guide_dir"] = args.guide_dir
+    if args.solves_dir:
+        cfg["solves_dir"] = args.solves_dir
+    if args.org_url:
+        cfg["azure_devops"]["org_url"] = args.org_url
+    if args.no_open:
+        cfg["open_in_vscode"] = False
+    if args.skip_tests:
+        cfg["run_tests"] = False
+    if args.skip_lint:
+        cfg["run_lint"] = False
+    if args.skip_build:
+        cfg["run_build"] = False
+    return cfg
+
+
+def _safe_name(text):
+    """Sanitize text for filename: only word chars, dots, dashes."""
+    import re
+    return re.sub(r"[^\w.-]+", "_", str(text)).strip("_") or "unlabeled"
+
+
+def guide_filename(case_number):
+    """Expected guide filename for a case number."""
+    safe = _safe_name(case_number)
+    return f"case-{safe}-for-dummies.md"
+
+
+def find_guide(case_number, guide_dir):
+    """Find the guide file, with fallback to substring match."""
+    guide_dir = Path(guide_dir)
+
+    # Try exact match first
+    exact = guide_dir / guide_filename(case_number)
+    if exact.exists():
+        return exact
+
+    # Try substring match (glob)
+    safe = _safe_name(case_number)
+    pattern = f"case-*{safe}*-for-dummies.md"
+    matches = list(guide_dir.glob(pattern))
+
+    if len(matches) == 1:
+        return matches[0]
+    elif len(matches) > 1:
+        sys.exit(
+            f"Ambiguous: found {len(matches)} guides matching '{pattern}':\n"
+            + "\n".join(f"  {m.name}" for m in matches)
+            + "\nRun case-guide with a more specific case number."
+        )
+    else:
+        sys.exit(
+            f"Guide not found: {exact}\n\n"
+            f"Run case-guide first:\n"
+            f"  cd ../case-guide\n"
+            f"  python case_guide.py {case_number}"
+        )
+
+
+def read_guide(path):
+    """Read and parse the guide file."""
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def extract_repo_suggestion(guide_text):
+    """Extract suggested repo URL from guide (if present in 'Get set up' section)."""
+    # Simple heuristic: look for 'git clone' in guide
+    for line in guide_text.split("\n"):
+        if "git clone" in line.lower():
+            # Extract URL
+            parts = line.split()
+            for i, part in enumerate(parts):
+                if "github" in part or "dev.azure" in part or "gitlab" in part:
+                    return part.rstrip(".")
+    return None
+
+
+def prompt_for_repo(suggested_repo=None):
+    """Interactively ask user for repo URL."""
+    print("\n" + "=" * 70)
+    if suggested_repo:
+        print(f"Suggested repo: {suggested_repo}")
+        prompt = "Enter repo URL (or press Enter to use suggested): "
+    else:
+        prompt = "Enter repo URL (clone link): "
+
+    while True:
+        url = input(prompt).strip()
+        if url:
+            return url
+        elif suggested_repo:
+            return suggested_repo
+        else:
+            print("Repo URL required.")
+
+
+def build_parser():
+    """Build and return ArgumentParser."""
+    parser = argparse.ArgumentParser(
+        prog="case_solve.py",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    # Positional
+    parser.add_argument("case_number", help="Case code (e.g., T2611845)")
+
+    # Repo & workspace
+    repo = parser.add_argument_group("repo & workspace")
+    repo.add_argument(
+        "--repo",
+        metavar="URL",
+        help="Git clone URL (suggests from guide if not provided)",
+    )
+    repo.add_argument(
+        "--solves-dir",
+        metavar="PATH",
+        help="Directory to store cloned repos and work (default: ./case-solves)",
+    )
+
+    # Azure DevOps
+    azure = parser.add_argument_group("azure devops")
+    azure.add_argument(
+        "--org-url",
+        metavar="URL",
+        help="Azure DevOps org URL (e.g., https://dev.azure.com/myorg)",
+    )
+
+    # Modes
+    modes = parser.add_argument_group("modes")
+    modes.add_argument(
+        "--show-plan",
+        action="store_true",
+        help="Show implementation plan from Claude, don't apply changes",
+    )
+    modes.add_argument(
+        "--no-implement",
+        action="store_true",
+        help="Stop after creating the branch (skip implementation)",
+    )
+    modes.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Don't commit or modify anything (inspect changes only)",
+    )
+
+    # Verification
+    verify = parser.add_argument_group("verification (auto-detect, can override)")
+    verify.add_argument(
+        "--skip-tests",
+        action="store_true",
+        help="Don't run test suite",
+    )
+    verify.add_argument(
+        "--skip-lint",
+        action="store_true",
+        help="Don't run linting checks",
+    )
+    verify.add_argument(
+        "--skip-build",
+        action="store_true",
+        help="Don't run build",
+    )
+
+    # Misc
+    misc = parser.add_argument_group("misc")
+    misc.add_argument(
+        "--guide-dir",
+        metavar="PATH",
+        help="Where case-guide writes guides (default: ../case-guide/case-guides)",
+    )
+    misc.add_argument(
+        "--config",
+        metavar="PATH",
+        default=str(CONFIG_PATH),
+        help=f"Config file (default: {CONFIG_PATH})",
+    )
+    misc.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Don't open result in VS Code",
+    )
+
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
+    cfg = load_config(Path(args.config) if args.config else None)
+    apply_cli_overrides(cfg, args)
+
+    # Validate claude is installed
+    if not shutil.which("claude"):
+        sys.exit(
+            "claude CLI not found. Install Claude Code (https://claude.com/claude-code) "
+            "and ensure it's on your PATH."
+        )
+
+    # Find and read guide
+    guide_path = find_guide(args.case_number, cfg["guide_dir"])
+    guide_text = read_guide(guide_path)
+    print(f"✓ Found guide: {guide_path}")
+
+    # Resolve repo URL
+    suggested_repo = extract_repo_suggestion(guide_text)
+    if not args.repo:
+        repo_url = prompt_for_repo(suggested_repo)
+    else:
+        repo_url = args.repo
+    print(f"✓ Using repo: {repo_url}")
+
+    # Import heavy modules here (after arg parsing, config loading)
+    from lib.workspace import WorkspaceManager
+    from lib.implementer import Implementer
+    from lib.verifier import Verifier
+    from lib.committer import Committer
+    from lib.report import ReportGenerator
+
+    # Setup workspace
+    workspace_mgr = WorkspaceManager(
+        case_number=args.case_number,
+        repo_url=repo_url,
+        solves_dir=Path(cfg["solves_dir"]),
+    )
+    workspace = workspace_mgr.setup()
+    print(f"✓ Workspace ready: {workspace.repo_dir}")
+    print(f"✓ Branch created: {workspace.branch_name}")
+
+    if args.no_implement:
+        print("\nBranch ready. Stopping here (--no-implement).")
+        return 0
+
+    # Implementation
+    implementer = Implementer(
+        workspace=workspace,
+        guide_text=guide_text,
+        case_number=args.case_number,
+        cfg=cfg,
+    )
+
+    if args.show_plan:
+        plan = implementer.generate_plan()
+        print("\n" + "=" * 70)
+        print("IMPLEMENTATION PLAN:")
+        print("=" * 70)
+        print(plan)
+        return 0
+
+    changes_summary = implementer.implement()
+    print(f"✓ Implementation complete: {len(changes_summary)} logical changes")
+
+    # Verification
+    if not args.dry_run:
+        verifier = Verifier(workspace=workspace, cfg=cfg)
+        test_results = verifier.run_all_checks()
+        print(f"✓ Verification complete: {test_results.total_checks} checks")
+
+        # Commit
+        committer = Committer(workspace=workspace)
+        commits = committer.commit_changes(changes_summary)
+        print(f"✓ Committed: {len(commits)} logical commits")
+    else:
+        test_results = None
+        commits = []
+        print("(dry-run: skipping verification and commits)")
+
+    # Report
+    report_gen = ReportGenerator(
+        case_number=args.case_number,
+        workspace=workspace,
+        changes_summary=changes_summary,
+        test_results=test_results,
+        commits=commits,
+        guide_path=guide_path,
+    )
+
+    report_path = report_gen.generate(workspace.case_dir / "VERIFICATION_CHECKLIST.md")
+    print(f"\n✓ Report generated: {report_path}")
+
+    if cfg["open_in_vscode"] and not args.dry_run:
+        code = shutil.which("code")
+        if code:
+            subprocess.run([code, str(report_path)], check=False)
+
+    print("\n" + "=" * 70)
+    print("Next steps:")
+    print(f"  1. Review changes in {workspace.repo_dir}")
+    print(f"  2. Read verification checklist: {report_path}")
+    print(f"  3. Run manual tests (see checklist)")
+    print(f"  4. Push branch: git push -u origin {workspace.branch_name}")
+    print("=" * 70)
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

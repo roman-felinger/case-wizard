@@ -1,0 +1,9 @@
+# case-wizard: Combined requirements for all three projects
+# Individual projects also have their own requirements.txt
+
+# case-brief
+msal>=1.28
+playwright>=1.45
+
+# case-guide & case-solve
+requests>=2.31

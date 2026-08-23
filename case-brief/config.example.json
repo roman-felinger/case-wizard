@@ -1,0 +1,29 @@
+{
+  "_comment": "Copy this file to config.json and edit that copy -- config.json is gitignored, this example isn't. Every field here is optional: case_brief.py has a built-in default for all of them, and every one can also be set with a command-line flag (which wins over this file). Run `python case_brief.py -h` to see them, or `python case_brief.py -i` for an interactive prompt instead of editing this file at all.",
+
+  "chrome": {
+    "profile_dir": "./chrome-automation-profile",
+    "debug_port": 9222,
+    "executable": null
+  },
+  "url_patterns": {
+    "crm_host_contains": ["dynamics.com"],
+    "bc_host": "businesscentral.dynamics.com"
+  },
+  "ticket_field": "ticketnumber",
+  "azure_devops": {
+    "_comment": "project: leave null to search every project in the org (slower, but you don't need to know which one holds the relevant repo).",
+    "org_url": "https://dev.azure.com/yourorg",
+    "project": null,
+    "pat_env_var": "AZDO_PAT",
+    "search_fields": ["System.Title", "System.Description"],
+    "max_prs": 50
+  },
+  "output_dir": "./case-briefs",
+  "open_in_vscode": true,
+
+  "customer_repo_map": [
+    { "_comment": "Optional. The 'Useful Commands' section auto-guesses a repo by fuzzy-matching the CRM customer name against ADO project/repo names -- add an entry here only to override a wrong/ambiguous guess for a specific customer." },
+    { "customer_contains": "Altium", "project": "AltiumRO", "repo": "altium-bc-extensions" }
+  ]
+}

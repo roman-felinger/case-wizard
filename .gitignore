@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# case-brief: secrets, sessions, and generated output -- never commit these
+case-brief/config.json
+case-brief/config.api.json
+case-brief/.token_cache/
+case-brief/.last_urls.json
+case-brief/chrome-automation-profile*/
+case-brief/case-briefs/*.md
+
+# case-guide: secrets and generated output -- never commit these
+case-guide/config.json
+case-guide/case-guides/*.md
+
+# case-solve: secrets, cloned repos, and generated output -- never commit these
+case-solve/config.json
+case-solve/case-solves/
+
+# OS noise
+Thumbs.db
+.DS_Store
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace

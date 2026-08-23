@@ -1,0 +1,30 @@
+{
+  "_comment": "Copy this file to config.json and edit that copy -- config.json is gitignored, this example isn't. Every field here is optional: case_solve.py has a built-in default for all of them, and every one can also be set with a command-line flag (which wins over this file). Run `python case_solve.py -h` to see them all.",
+
+  "guide_dir": "../case-guide/case-guides",
+  "solves_dir": "./case-solves",
+  "open_in_vscode": true,
+  "auto_commit": true,
+  "run_tests": true,
+  "run_lint": true,
+  "run_build": true,
+
+  "azure_devops": {
+    "_comment": "Same PAT as case-brief/case-guide -- see case-brief/README.md for how to create one.",
+    "org_url": "https://dev.azure.com/yourorg",
+    "pat_env_var": "AZDO_PAT"
+  },
+
+  "claude": {
+    "_comment": "model: null uses claude's own default. agent: the project-scoped .claude/agents/<name>.md to run as -- null/empty falls back to claude's plain default. timeout: max seconds to wait for implementation plan/steps. extra_args: raw flags passed to claude CLI.",
+    "model": null,
+    "agent": "case-solver",
+    "timeout": 900,
+    "extra_args": []
+  },
+
+  "customer_repo_map": [
+    { "_comment": "Optional. For customers that always use the same repo, add an entry here to auto-suggest it. Fuzzy-match on customer_contains." },
+    { "customer_contains": "Altium", "repo": "https://dev.azure.com/artexis/BTECH/_git/altium-bc-extensions" }
+  ]
+}
