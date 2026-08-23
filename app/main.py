@@ -13,7 +13,7 @@ from settings import (
 )
 from checks import run_health_check, get_startup_issues
 from progress import ProgressReporter, show_progress_stream, stream_subprocess_output
-from crm_check import open_crm_in_browser, prompt_crm_login
+from crm_check import open_crm_in_browser, check_crm_accessibility
 from azdo_check import check_azdo_access, get_azdo_test_message
 
 HERE = Path(__file__).parent

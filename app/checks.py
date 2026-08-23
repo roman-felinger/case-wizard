@@ -72,11 +72,26 @@ def check_claude_login():
         return False, "Check failed"
 
 
-def check_crm_tab():
-    """Check if CRM tab is accessible and logged in (user-configurable)."""
-    # This is a user action (open CRM), not a system requirement
-    # Return as warning, not critical - user can configure in setup wizard
-    return None, "Dynamics 365: Configure in next step"
+def check_crm_tab(crm_url: str = None):
+    """Check if CRM is accessible and user might be logged in."""
+    if not crm_url:
+        return None, "CRM URL not configured"
+
+    try:
+        from crm_check import check_crm_accessibility
+        logged_in, message = check_crm_accessibility(crm_url)
+
+        if logged_in is True:
+            return True, "Logged in to CRM"
+        elif logged_in is False:
+            return None, "CRM accessible - awaiting login"
+        else:
+            return None, "CRM check pending"
+
+    except ImportError:
+        return None, "CRM check unavailable"
+    except Exception:
+        return None, "CRM check pending"
 
 
 def check_config(config):
@@ -95,7 +110,7 @@ def run_health_check(config):
         ("Git", check_git()),
         ("Claude CLI", check_claude()),
         ("Claude Logged In", check_claude_login()),
-        ("CRM Browser Tab", check_crm_tab()),
+        ("CRM Browser Tab", check_crm_tab(config.get("crm_url"))),
         ("Azure DevOps Config", check_config(config)),
     ]
 

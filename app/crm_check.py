@@ -1,67 +1,77 @@
 """
-CRM login verification.
+CRM login detection.
 
-Simple approach: open CRM in default browser, ask user to confirm login.
-No browser automation needed (avoids Playwright dependency).
+Simple HTTP-based check: test if CRM is accessible and user might be logged in.
 """
 
 import webbrowser
-import time
+import requests
+from typing import Tuple
+
+
+def check_crm_accessibility(crm_url: str, timeout: int = 5) -> Tuple[bool, str]:
+    """
+    Check if CRM is accessible (simple HTTP check).
+
+    Makes a HEAD request to detect:
+    - If URL redirects to login page → user not logged in
+    - If page loads → user might be logged in or auth is cached
+
+    Args:
+        crm_url: Organization CRM URL
+        timeout: Request timeout in seconds
+
+    Returns:
+        (logged_in: bool, message: str)
+        - (True, "message") if user appears logged in
+        - (False, "message") if redirected to login
+        - (None, "message") if can't determine
+    """
+    try:
+        # Try to access CRM with no redirect following
+        response = requests.head(crm_url, timeout=timeout, allow_redirects=False)
+
+        # Check response code
+        if response.status_code == 302 or response.status_code == 301:
+            # Redirected - likely to login page
+            location = response.headers.get("Location", "").lower()
+            if "login" in location or "signin" in location or "auth" in location:
+                return False, "⏳ Not logged in - waiting for login..."
+
+        elif response.status_code == 200:
+            # Page loaded without redirect - user likely logged in
+            return True, "✅ CRM accessible - you appear to be logged in"
+
+        elif response.status_code == 401 or response.status_code == 403:
+            # Unauthorized - not logged in
+            return False, "⏳ Not logged in - please log in..."
+
+        else:
+            # Other status - can't determine
+            return None, f"ⓘ CRM status unclear (HTTP {response.status_code})"
+
+    except requests.exceptions.Timeout:
+        return None, "⏱️ CRM check timed out - check network"
+
+    except requests.exceptions.ConnectionError:
+        return None, "❌ Cannot reach CRM - check URL or network"
+
+    except Exception as e:
+        return None, f"ⓘ CRM check error: {str(e)}"
 
 
 def open_crm_in_browser(crm_url: str) -> bool:
     """
-    Open CRM in user's default browser.
+    Open CRM in browser (system default).
 
     Args:
         crm_url: Organization CRM URL
 
     Returns:
-        True if opened successfully, False otherwise
+        True if opened successfully
     """
     try:
         webbrowser.open(crm_url)
         return True
-    except Exception as e:
+    except Exception:
         return False
-
-
-def check_crm_on_startup(crm_url: str) -> tuple[bool, str]:
-    """
-    Check if CRM might already be logged in (on app startup).
-
-    This is a heuristic check - we can't verify without browser automation.
-    Returns status based on assumptions.
-
-    Args:
-        crm_url: Organization CRM URL
-
-    Returns:
-        (status: bool, message: str)
-        - (None, "Not checked") if need manual verification
-        - (False, "Not ready") if likely not logged in
-    """
-    # On startup, we can't really verify without browser automation
-    # Return "not checked" - user needs to click the button
-    return None, "Click 'Check CRM Login' to verify"
-
-
-def prompt_crm_login(crm_url: str) -> tuple[bool, str]:
-    """
-    Prompt user to log into CRM and confirm when ready.
-
-    Opens browser, waits for user confirmation.
-
-    Args:
-        crm_url: Organization CRM URL
-
-    Returns:
-        (success: bool, message: str)
-    """
-    # Open browser
-    if not open_crm_in_browser(crm_url):
-        return False, "❌ Could not open browser"
-
-    # Browser opened - user will log in
-    # We return success after user confirms (handled in UI)
-    return True, f"✅ CRM opened at {crm_url} - Please log in and confirm"
