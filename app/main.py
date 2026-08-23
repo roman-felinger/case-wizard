@@ -13,7 +13,8 @@ from settings import (
 )
 from checks import run_health_check, get_startup_issues
 from progress import ProgressReporter, show_progress_stream, stream_subprocess_output
-from crm_check import open_crm_in_browser, check_crm_accessibility
+from crm_playwright import check_login_headless as check_crm_login_dom, reset_profile as reset_crm_profile
+from shutdown_watcher import start_once as start_shutdown_watcher
 from azdo_check import check_azdo_access, get_azdo_test_message
 
 HERE = Path(__file__).parent
@@ -183,27 +184,51 @@ def show_stage_tab(stage_id, stage_name, stage_emoji, description, cmd_name, ski
                 st.caption("**Run Lint**")
                 st.caption("✅" if config.get("run_lint") else "❌")
             with col3:
-                st.caption("**Auto-Commit**")
-                st.caption("✅" if config.get("auto_commit") else "❌")
+                st.caption("**Run Build**")
+                st.caption("✅" if config.get("run_build") else "❌")
 
         st.caption("💡 Edit parameters in ⚙️ Settings")
+
+    # Solve acts on a real repo (clones it, creates a branch, commits) -
+    # confirm which one *here*, in the app, instead of case_solve.py
+    # blocking on an interactive terminal prompt it'll never get an
+    # answer to when launched as a subprocess.
+    repo_url = ""
+    if stage_id == "solve":
+        st.divider()
+        st.markdown("### Confirm Repository")
+        case_num_now = st.session_state.get("case_number", "")
+        repo_key = f"repo_url_{case_num_now}" if case_num_now else "repo_url_pending"
+        repo_url = st.text_input(
+            "Git clone URL",
+            value=st.session_state.get(repo_key, ""),
+            placeholder="https://dev.azure.com/org/project/_git/repo",
+            key="solve_repo_url_input",
+            help="case-solve clones this, creates a case/<number> branch on it, and commits there. Nothing is pushed automatically."
+        )
+        st.session_state[repo_key] = repo_url
+        if not repo_url:
+            st.caption("⚠️ Required before running Solve - paste the repo's git clone URL")
 
     st.divider()
 
     # Run button
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
+        run_disabled = stage_id == "solve" and not repo_url
         run_button = st.button(
             f"▶ Run {stage_name}",
             key=f"run_{stage_id}",
             type="primary",
-            use_container_width=True
+            use_container_width=True,
+            disabled=run_disabled,
         )
 
     with col2:
         if is_complete:
             st.button(
                 "✅ Done",
+                key=f"done_{stage_id}",
                 disabled=True,
                 use_container_width=True
             )
@@ -222,7 +247,42 @@ def show_stage_tab(stage_id, stage_name, stage_emoji, description, cmd_name, ski
             "solve": PROJECT_ROOT / "case-solve",
         }
 
+        # Advanced Settings only actually take effect via these CLI flags -
+        # each stage script reads its config from config.json + CLI args,
+        # not from environment variables (get_env_dict's vars are for the
+        # ADO PAT specifically, which lib/ado_api.py does read from env).
         cmd = [f"{cmd_name}.py", case_num, "--no-open"]
+
+        if stage_id == "brief":
+            if config.get("skip_ado"):
+                cmd.append("--skip-ado")
+            if config.get("azdo_org_url"):
+                cmd += ["--org-url", config["azdo_org_url"]]
+            if config.get("max_prs"):
+                cmd += ["--max-prs", str(config["max_prs"])]
+
+        elif stage_id == "guide":
+            if config.get("skip_ado"):
+                cmd.append("--skip-ado")
+            if config.get("azdo_org_url"):
+                cmd += ["--org-url", config["azdo_org_url"]]
+            if config.get("claude_model"):
+                cmd += ["--model", config["claude_model"]]
+            if config.get("claude_timeout"):
+                cmd += ["--timeout", str(config["claude_timeout"])]
+            if not config.get("include_style_prs", True):
+                cmd.append("--no-style-prs")
+
+        elif stage_id == "solve":
+            cmd += ["--repo", repo_url, "--yes"]
+            if config.get("azdo_org_url"):
+                cmd += ["--org-url", config["azdo_org_url"]]
+            if not config.get("run_tests"):
+                cmd.append("--skip-tests")
+            if not config.get("run_lint"):
+                cmd.append("--skip-lint")
+            if not config.get("run_build"):
+                cmd.append("--skip-build")
 
         with output_ph.container():
             # Progress reporter
@@ -302,7 +362,12 @@ def show_stage_tab(stage_id, stage_name, stage_emoji, description, cmd_name, ski
                             for p in progress_lines[-10:]:
                                 st.markdown(f"ℹ️ {p}")
 
-                returncode = process.wait(timeout=600)
+                # The outer wait must allow at least as long as the
+                # configured claude call itself (case-solve alone defaults
+                # to 900s for that call), plus slack for everything else
+                # the stage does (clone, ADO queries, tests/lint/build).
+                outer_timeout = max(600, config.get("claude_timeout", 600) + 300)
+                returncode = process.wait(timeout=outer_timeout)
 
                 if returncode == 0:
                     reporter.success(f"{stage_name} completed")
@@ -325,8 +390,10 @@ def show_stage_tab(stage_id, stage_name, stage_emoji, description, cmd_name, ski
                         st.code("\n".join(output_lines), language="text")
 
             except subprocess.TimeoutExpired:
-                reporter.error("Timeout", f"Operation took over 10 minutes")
-                st.error(f"❌ {stage_name} timed out (10+ minutes)")
+                process.kill()
+                process.wait()  # reap it - don't leave a zombie/orphan behind
+                reporter.error("Timeout", f"Operation took over {outer_timeout}s")
+                st.error(f"❌ {stage_name} timed out after {outer_timeout}s and was stopped")
             except Exception as e:
                 reporter.error("Error", str(e))
                 st.error(f"❌ Error: {str(e)}")
@@ -422,9 +489,10 @@ def show_settings():
                     run_build = st.checkbox("Run build", value=config.get("run_build", False))
 
                 with col2:
-                    auto_commit = st.checkbox("Auto-commit", value=config.get("auto_commit", True))
                     skip_ado = st.checkbox("Skip ADO search", value=config.get("skip_ado", False))
                     include_style = st.checkbox("Include style PRs", value=config.get("include_style_prs", True))
+
+                st.caption("💡 Solve always commits its changes as it goes (never pushes) - nothing to toggle there")
 
                 max_prs = st.number_input("Max PRs", value=config.get("max_prs", 20), min_value=5, max_value=100)
                 claude_model = st.selectbox("Claude model", [None, "opus", "sonnet"],
@@ -436,7 +504,6 @@ def show_settings():
                         "run_tests": run_tests,
                         "run_lint": run_lint,
                         "run_build": run_build,
-                        "auto_commit": auto_commit,
                         "skip_ado": skip_ado,
                         "max_prs": int(max_prs),
                         "include_style_prs": include_style,
@@ -456,32 +523,10 @@ def show_main_app():
     if "auto_checked" not in st.session_state:
         st.session_state.auto_checked = True
 
-        # CRM: Actually verify login by making HTTP request
-        if config.get("crm_url"):
-            try:
-                import requests
-                response = requests.head(config["crm_url"], timeout=5, allow_redirects=False)
-
-                # Check if redirected to login page
-                if response.status_code in (302, 301):
-                    location = response.headers.get("Location", "").lower()
-                    if "login" in location or "signin" in location or "auth" in location:
-                        st.session_state.crm_check_result = (False, "Not logged in - redirected to login")
-                    else:
-                        st.session_state.crm_check_result = (True, "CRM accessible")
-                elif response.status_code == 200:
-                    # Page loaded successfully - user likely logged in
-                    st.session_state.crm_check_result = (True, "Logged in")
-                elif response.status_code in (401, 403):
-                    st.session_state.crm_check_result = (False, "Not logged in - access denied")
-                else:
-                    st.session_state.crm_check_result = (None, f"Check needed (HTTP {response.status_code})")
-            except requests.exceptions.Timeout:
-                st.session_state.crm_check_result = (None, "CRM timeout - check network")
-            except Exception as e:
-                st.session_state.crm_check_result = (None, "CRM check error")
-        else:
-            st.session_state.crm_check_result = (False, "CRM URL not configured")
+        # CRM: DOM-based check against case-wizard's own persistent
+        # profile (see crm_playwright.py) - actually reflects real login
+        # state, not just whether the URL is publicly reachable.
+        st.session_state.crm_check_result = check_crm_login_dom(config.get("crm_url"))
 
         # ADO: Actually test the API with stored credentials
         if config.get("azdo_org_url") and config.get("azdo_pat"):
@@ -518,128 +563,122 @@ def show_main_app():
 
     st.divider()
 
-    # PREFLIGHT: Show all system checks + service checks
-    st.markdown("### 🛫 Preflight Checks")
+    # PREFLIGHT: system checks (real status, not a stub) + service checks
+    py_ok = health.get("Python 3.8+", {}).get("status")
+    git_ok = health.get("Git", {}).get("status")
+    claude_ok = health.get("Claude CLI", {}).get("status")
+    claude_login_ok = health.get("Claude Logged In", {}).get("status")
 
-    # System checks (Python, Git, Claude)
-    col1, col2, col3, col4 = st.columns([1.5, 1.5, 1.5, 1.5])
-    with col1:
-        st.caption("**Python**")
-        st.markdown("✅" if "python" in str(health).lower() else "✅")
-    with col2:
-        st.caption("**Git**")
-        st.markdown("✅" if "git" in str(health).lower() else "✅")
-    with col3:
-        st.caption("**Claude CLI**")
-        st.markdown("✅" if "claude" in str(health).lower() else "✅")
-    with col4:
-        st.caption("**Claude Login**")
-        st.markdown("✅" if "logged" in str(health).lower() else "✅")
-
-    st.divider()
-
-    # Service checks: CRM and ADO with recheck buttons
-    st.markdown("### 🔌 Service Checks")
-    col1, col2, col3, col4 = st.columns([1, 1.5, 1, 1.5])
-
-    with col1:
-        st.markdown("**CRM:**")
-        crm_result = st.session_state.get("crm_check_result")
-        if crm_result:
-            status, msg = crm_result
-            if status is True:
-                st.markdown("✅")
-            elif status is False:
-                st.markdown("❌")
-            else:
-                st.markdown("⏳")
-
-    with col2:
-        if st.button("↻ Recheck CRM", use_container_width=True, key="recheck_crm_btn"):
-            if config.get("crm_url"):
-                try:
-                    import requests
-                    response = requests.head(config["crm_url"], timeout=5, allow_redirects=False)
-
-                    if response.status_code in (302, 301):
-                        location = response.headers.get("Location", "").lower()
-                        if "login" in location or "signin" in location or "auth" in location:
-                            st.session_state.crm_check_result = (False, "Not logged in")
-                        else:
-                            st.session_state.crm_check_result = (True, "CRM accessible")
-                    elif response.status_code == 200:
-                        st.session_state.crm_check_result = (True, "Logged in")
-                    elif response.status_code in (401, 403):
-                        st.session_state.crm_check_result = (False, "Access denied")
-                    else:
-                        st.session_state.crm_check_result = (None, f"HTTP {response.status_code}")
-                except Exception as e:
-                    st.session_state.crm_check_result = (None, "Check error")
-            st.rerun()
-
-    with col3:
-        st.markdown("**ADO:**")
-        ado_result = st.session_state.get("ado_check_result")
-        if ado_result:
-            status, msg = ado_result
-            if status is True:
-                st.markdown("✅")
-            else:
-                st.markdown("❌")
-
-    with col4:
-        if st.button("↻ Recheck ADO", use_container_width=True, key="recheck_ado_btn"):
-            if config.get("azdo_org_url") and config.get("azdo_pat"):
-                try:
-                    ado_ok, ado_msg = check_azdo_access(config["azdo_org_url"], config["azdo_pat"])
-                    st.session_state.ado_check_result = (ado_ok, ado_msg)
-                except Exception as e:
-                    st.session_state.ado_check_result = (False, f"API error: {str(e)}")
-            st.rerun()
-
-    # Show messages if not all green
     crm_result = st.session_state.get("crm_check_result")
     ado_result = st.session_state.get("ado_check_result")
+    crm_ok = crm_result[0] if crm_result else None
+    ado_ok = ado_result[0] if ado_result else None
 
-    if crm_result and crm_result[0] is not True:
-        st.warning(f"❌ CRM: {crm_result[1]}")
+    all_green = all(v is True for v in [py_ok, git_ok, claude_ok, claude_login_ok, crm_ok, ado_ok])
 
-    if ado_result and ado_result[0] is not True:
-        st.warning(f"❌ ADO: {ado_result[1]}")
+    def _icon(v):
+        return "✅" if v is True else ("❌" if v is False else "⏳")
 
-    # Recheck All button at bottom
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        if st.button("↻ Recheck All", use_container_width=True, key="recheck_all_btn"):
-            # Recheck CRM
-            if config.get("crm_url"):
-                try:
-                    import requests
-                    response = requests.head(config["crm_url"], timeout=5, allow_redirects=False)
-                    if response.status_code in (302, 301):
-                        location = response.headers.get("Location", "").lower()
-                        if "login" in location or "signin" in location or "auth" in location:
-                            st.session_state.crm_check_result = (False, "Not logged in")
-                        else:
-                            st.session_state.crm_check_result = (True, "CRM accessible")
-                    elif response.status_code == 200:
-                        st.session_state.crm_check_result = (True, "Logged in")
-                    elif response.status_code in (401, 403):
-                        st.session_state.crm_check_result = (False, "Access denied")
-                    else:
-                        st.session_state.crm_check_result = (None, f"HTTP {response.status_code}")
-                except Exception as e:
-                    st.session_state.crm_check_result = (None, "Check error")
+    if all_green:
+        # Nothing needs attention - one compact line, no setup UI in sight.
+        col1, col2 = st.columns([5, 1])
+        with col1:
+            st.success(
+                f"✅ All systems ready — Python · Git · Claude · CRM · ADO"
+            )
+        with col2:
+            if st.button("↻ Recheck", use_container_width=True, key="recheck_all_btn"):
+                with st.spinner("Rechecking..."):
+                    st.session_state.crm_check_result = check_crm_login_dom(config.get("crm_url"))
+                    if config.get("azdo_org_url") and config.get("azdo_pat"):
+                        try:
+                            ado_ok2, ado_msg2 = check_azdo_access(config["azdo_org_url"], config["azdo_pat"])
+                            st.session_state.ado_check_result = (ado_ok2, ado_msg2)
+                        except Exception as e:
+                            st.session_state.ado_check_result = (False, f"API error: {str(e)}")
+                st.rerun()
+    else:
+        st.markdown("### 🛫 Preflight Checks")
 
-            # Recheck ADO
-            if config.get("azdo_org_url") and config.get("azdo_pat"):
-                try:
-                    ado_ok, ado_msg = check_azdo_access(config["azdo_org_url"], config["azdo_pat"])
-                    st.session_state.ado_check_result = (ado_ok, ado_msg)
-                except Exception as e:
-                    st.session_state.ado_check_result = (False, f"API error: {str(e)}")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.caption("**Python**")
+            st.markdown(_icon(py_ok))
+        with col2:
+            st.caption("**Git**")
+            st.markdown(_icon(git_ok))
+        with col3:
+            st.caption("**Claude CLI**")
+            st.markdown(_icon(claude_ok))
+        with col4:
+            st.caption("**Claude Working**")
+            st.markdown(_icon(claude_login_ok))
 
-            st.rerun()
+        st.divider()
+        st.markdown("### 🔌 Service Checks")
+        col1, col2, col3, col4 = st.columns([1, 1.5, 1, 1.5])
+
+        with col1:
+            st.markdown("**CRM:**")
+            st.markdown(_icon(crm_ok))
+        with col2:
+            if st.button("↻ Recheck CRM", use_container_width=True, key="recheck_crm_btn"):
+                with st.spinner("Checking CRM login..."):
+                    st.session_state.crm_check_result = check_crm_login_dom(config.get("crm_url"))
+                st.rerun()
+
+        with col3:
+            st.markdown("**ADO:**")
+            st.markdown(_icon(ado_ok))
+        with col4:
+            if st.button("↻ Recheck ADO", use_container_width=True, key="recheck_ado_btn"):
+                if config.get("azdo_org_url") and config.get("azdo_pat"):
+                    try:
+                        ado_ok2, ado_msg2 = check_azdo_access(config["azdo_org_url"], config["azdo_pat"])
+                        st.session_state.ado_check_result = (ado_ok2, ado_msg2)
+                    except Exception as e:
+                        st.session_state.ado_check_result = (False, f"API error: {str(e)}")
+                st.rerun()
+
+        # Only surface controls for whatever is actually broken
+        if crm_ok is not True:
+            col1, col2, col3 = st.columns([2.5, 1, 1])
+            with col1:
+                st.warning(f"❌ CRM: {crm_result[1] if crm_result else 'Not checked yet'}")
+            with col2:
+                if st.button("🔑 Log in to CRM", use_container_width=True, key="crm_login_btn"):
+                    # Detached background process - doesn't block Streamlit.
+                    # Auto-closes itself the moment login is detected.
+                    subprocess.Popen(
+                        [sys.executable, str(HERE / "crm_playwright.py"), "--login", config.get("crm_url", "")],
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                    )
+                    st.info("🌐 Browser window opened - log in there. It closes itself when done, then click Recheck CRM.")
+            with col3:
+                if st.button("♻️ Reset session", use_container_width=True, key="crm_reset_btn",
+                             help="Use this if login keeps failing instantly - clears a stuck browser lock"):
+                    with st.spinner("Resetting CRM session..."):
+                        reset_crm_profile()
+                    st.success("Reset done - try 'Log in to CRM' again.")
+
+        if ado_ok is not True:
+            st.warning(f"❌ ADO: {ado_result[1] if ado_result else 'Not checked yet'}")
+
+        if claude_login_ok is not True:
+            st.warning(f"❌ Claude: {health.get('Claude Logged In', {}).get('message', 'Not working')}")
+
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if st.button("↻ Recheck All", use_container_width=True, key="recheck_all_btn"):
+                with st.spinner("Rechecking..."):
+                    st.session_state.crm_check_result = check_crm_login_dom(config.get("crm_url"))
+                    if config.get("azdo_org_url") and config.get("azdo_pat"):
+                        try:
+                            ado_ok2, ado_msg2 = check_azdo_access(config["azdo_org_url"], config["azdo_pat"])
+                            st.session_state.ado_check_result = (ado_ok2, ado_msg2)
+                        except Exception as e:
+                            st.session_state.ado_check_result = (False, f"API error: {str(e)}")
+                st.rerun()
 
     st.divider()
 
@@ -800,176 +839,117 @@ def show_config_wizard():
         st.info("⏳ After fixing, press F5 to refresh and continue.")
         return
 
-    # Step 2: Configure Missing Items
-    st.markdown("### Step 2: Configure Your Setup")
-    st.markdown("**Complete the following configuration:**")
+    # What's Missing - only ever visible for the thing(s) actually
+    # missing. Anything already working (CRM login, etc.) shows nothing.
+    st.markdown("### ⚠️ What's Missing")
 
-    # CRM Login Section (outside form, so button works)
-    st.markdown("#### 🌐 Dynamics 365 CRM")
-    st.caption("App will open CRM, wait for you to log in, then verify")
+    # Reuse the result from the Step 1 health panel above (same DOM
+    # check) instead of launching a second browser for the same thing.
+    if "wizard_crm_result" not in st.session_state:
+        crm_health = health.get("CRM Browser Tab", {})
+        st.session_state.wizard_crm_result = (crm_health.get("status"), crm_health.get("message", "Not checked"))
 
-    # Input for CRM URL (pre-filled with saved value)
-    crm_url = st.text_input(
-        "Your CRM URL",
-        value=config.get("crm_url", "https://artex-crm.crm4.dynamics.com/"),
-        placeholder="https://yourorg-crm.crm.dynamics.com/",
-        key="crm_url_input",
-        help="Your organization's Dynamics 365 CRM URL"
-    )
+    crm_status, crm_msg = st.session_state.wizard_crm_result
+    crm_ready = crm_status is True
+    crm_url = config.get("crm_url", "https://artex-crm.crm4.dynamics.com/")
 
-    # CRM status (stored in session state)
-    if "crm_login_status" not in st.session_state:
-        st.session_state.crm_login_status = None
-
-    # Open CRM in new tab using HTML
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        # HTML link that opens in new tab of same browser
-        st.markdown(
-            f"""
-            <a href="{crm_url}" target="_blank" style="
-                display: inline-block;
-                padding: 8px 16px;
-                background-color: #0d7377;
-                color: white;
-                border-radius: 4px;
-                text-decoration: none;
-                font-weight: 500;
-            ">🔗 Open CRM in New Tab</a>
-            """,
-            unsafe_allow_html=True
+    if not crm_ready:
+        st.markdown("#### 🌐 Dynamics 365 CRM")
+        crm_url = st.text_input(
+            "Your CRM URL",
+            value=crm_url,
+            placeholder="https://yourorg-crm.crm.dynamics.com/",
+            key="crm_url_input",
+            help="Your organization's Dynamics 365 CRM URL"
         )
-    with col2:
-        st.caption("(opens in new tab)")
-
-    st.caption("👉 Open CRM, log in if needed, then check the box below")
-
-    # User confirms when logged in
-    crm_confirmed = st.checkbox(
-        "✅ I'm logged in to CRM",
-        value=False,
-        key="crm_confirmed_check",
-        help="Check after logging into Dynamics 365 CRM in the new tab"
-    )
-
-    # For form validation, check if CRM was confirmed
-    crm_ready = st.session_state.get("crm_confirmed_check", False) is True
-
-    st.divider()
-
-    # Configuration form for ADO and other settings
-    with st.form("config_form"):
-
-        # Azure DevOps Section
-        st.markdown("#### 🔑 Azure DevOps Access")
-        st.caption("Your organization URL and personal access token")
-
-        # Initialize ADO status in session state
-        if "azdo_status" not in st.session_state:
-            st.session_state.azdo_status = None
-
-        # Org URL input
-        org_url = st.text_input(
-            "Organization URL",
-            value=config.get("azdo_org_url", ""),
-            placeholder="https://dev.azure.com/myorg",
-            key="org_url_input",
-            help="Your Azure DevOps organization (e.g., https://dev.azure.com/myorg)"
-        )
-
-        # PAT input + help button
-        col1, col2 = st.columns([3, 1])
+        st.warning(f"❌ CRM: {crm_msg}")
+        col1, col2, col3 = st.columns([1, 1, 1])
         with col1:
+            if st.button("🔑 Log in to CRM", use_container_width=True, key="wizard_crm_login_btn"):
+                subprocess.Popen(
+                    [sys.executable, str(HERE / "crm_playwright.py"), "--login", crm_url],
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                )
+                st.info("🌐 Browser window opened - log in there, then click Recheck.")
+        with col2:
+            if st.button("↻ Recheck", use_container_width=True, key="wizard_crm_recheck_btn"):
+                with st.spinner("Checking CRM login..."):
+                    st.session_state.wizard_crm_result = check_crm_login_dom(crm_url)
+                st.rerun()
+        with col3:
+            if st.button("♻️ Reset session", use_container_width=True, key="wizard_crm_reset_btn",
+                         help="Use this if login keeps failing instantly"):
+                with st.spinner("Resetting..."):
+                    reset_crm_profile()
+                st.success("Reset done - try 'Log in to CRM' again.")
+        st.divider()
+
+    # Azure DevOps Section - one button, does both check and save
+    st.markdown("#### 🔑 Azure DevOps Access")
+
+    azdo_status = st.session_state.get("azdo_status")
+    azdo_verified = azdo_status[0] is True if azdo_status else False
+
+    if azdo_verified:
+        st.success(f"✅ ADO: {azdo_status[1]}")
+    else:
+        # A real st.form is the only thing that fully stops a rerun on
+        # every keystroke/blur/Enter - fields inside it only commit their
+        # values (and trigger one rerun) on the explicit submit click.
+        with st.form("azdo_form", border=False):
+            org_url = st.text_input(
+                "Organization URL",
+                value=config.get("azdo_org_url", ""),
+                placeholder="https://dev.azure.com/myorg",
+                help="Your Azure DevOps organization (e.g., https://dev.azure.com/myorg)"
+            )
             azdo_pat = st.text_input(
                 "Personal Access Token (PAT)",
                 value=config.get("azdo_pat", ""),
                 type="password",
-                key="pat_input",
                 placeholder="Paste your PAT here",
-                help="Token with Code (Read) and Project and Team (Read) scopes"
+                help=(
+                    "Needs Code (Read) and Project and Team (Read) scopes.\n\n"
+                    "**How to create one:**\n"
+                    "1. Go to: https://dev.azure.com/{org}/_usersSettings/tokens\n"
+                    "2. Click **New Token**\n"
+                    "3. Name: `case-wizard`\n"
+                    "4. Scopes: Code (Read), Project and Team (Read)\n"
+                    "5. Copy and paste it here"
+                )
             )
-        with col2:
-            st.caption(" ")
-            if st.form_submit_button("ℹ️ How?", use_container_width=True, help="Show PAT creation steps"):
-                with st.expander("Create PAT", expanded=True):
-                    st.markdown("""
-                    1. Go to: https://dev.azure.com/{org}/_usersSettings/tokens
-                    2. Click **New Token**
-                    3. Name: `case-wizard`
-                    4. Scopes: ✅ Code (Read), ✅ Project and Team (Read)
-                    5. Copy and paste above
-                    """)
+            submitted = st.form_submit_button("🔌 Check Connection", use_container_width=True)
 
-        # Submit button
-        submit = st.form_submit_button(
-            "✅ Complete Setup",
-            type="primary",
-            use_container_width=True
-        )
-
-        # Process form submission
-        if submit:
-            errors = []
-
-            if not crm_ready:
-                errors.append("Please verify CRM login by clicking 'Check CRM Login' above")
-            if not azdo_verified:
-                errors.append("Please verify Azure DevOps access by clicking 'Check ADO Access' above")
-
-            if errors:
-                st.error("**Please fix these before continuing:**\n" + "\n".join(f"- {e}" for e in errors))
-            else:
-                # Save configuration
-                new_config = dict(DEFAULTS)
-                new_config["azdo_org_url"] = org_url
-                new_config["azdo_pat"] = azdo_pat
-                new_config["crm_url"] = crm_url
-                save_config(new_config)
-
-                st.success("✅ Setup complete! Restarting app...")
-                st.session_state.config_complete = True
-                import time
-                time.sleep(1)
-                st.rerun()
-
-    # ADO Check Button - OUTSIDE FORM (after form ends)
-    st.divider()
-    st.markdown("#### 🔑 Verify Azure DevOps Access")
-
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        if st.button("🔐 Check ADO Access", use_container_width=True, key="check_azdo_btn"):
-            # Get current form values
-            form_org_url = st.session_state.get("org_url_input", config.get("azdo_org_url", ""))
-            form_azdo_pat = st.session_state.get("pat_input", config.get("azdo_pat", ""))
-
-            if form_org_url and form_azdo_pat:
-                with st.spinner("🕐 Testing Azure DevOps API..."):
-                    success, message = check_azdo_access(form_org_url, form_azdo_pat)
+        if submitted:
+            if org_url and azdo_pat:
+                with st.spinner("Testing Azure DevOps API..."):
+                    try:
+                        success, message = check_azdo_access(org_url, azdo_pat)
+                    except Exception as e:
+                        success, message = False, f"Check failed: {e}"
                 st.session_state.azdo_status = (success, message)
+                if success:
+                    # Works - save immediately, no separate confirm step
+                    try:
+                        new_config = dict(DEFAULTS)
+                        new_config["azdo_org_url"] = org_url
+                        new_config["azdo_pat"] = azdo_pat
+                        new_config["crm_url"] = crm_url
+                        save_config(new_config)
+                    except Exception as e:
+                        st.session_state.azdo_status = (False, f"Connected, but failed to save: {e}")
             else:
                 st.session_state.azdo_status = (False, "Enter URL and PAT first")
+            st.rerun()
 
-    with col2:
-        # Show ADO status
-        if st.session_state.azdo_status is not None:
-            success, message = st.session_state.azdo_status
-            if success:
-                st.markdown("✅")
-            else:
-                st.markdown("❌")
+        if azdo_status and azdo_status[0] is not True:
+            st.error(f"❌ ADO: {azdo_status[1]}")
 
-    # Show result message
-    if st.session_state.azdo_status is not None:
-        success, message = st.session_state.azdo_status
-        if success:
-            st.success(message)
-        else:
-            st.error(message)
-
-    # For form validation - need to get values again
-    azdo_status = st.session_state.get("azdo_status")
-    azdo_verified = azdo_status[0] is True if azdo_status else False
+    # Once both CRM and ADO are confirmed, there's nothing left to
+    # configure - go straight to the main app, no extra "finish" click.
+    if crm_ready and azdo_verified:
+        st.session_state.config_complete = True
+        st.rerun()
 
     # Summary
     st.divider()
@@ -989,6 +969,7 @@ def show_config_wizard():
 
 # Main
 st.set_page_config(page_title="case-wizard", page_icon="🧙", layout="wide")
+start_shutdown_watcher()
 
 # Always load config and run health checks
 config = load_config()

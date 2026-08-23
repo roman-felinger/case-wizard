@@ -73,21 +73,13 @@ def check_claude_login():
 
 
 def check_crm_tab(crm_url: str = None):
-    """Check if CRM is accessible and user might be logged in."""
+    """Check real CRM login state via DOM inspection (see crm_playwright.py)."""
     if not crm_url:
         return None, "CRM URL not configured"
 
     try:
-        from crm_check import check_crm_accessibility
-        logged_in, message = check_crm_accessibility(crm_url)
-
-        if logged_in is True:
-            return True, "Logged in to CRM"
-        elif logged_in is False:
-            return None, "CRM accessible - awaiting login"
-        else:
-            return None, "CRM check pending"
-
+        from crm_playwright import check_login_headless
+        return check_login_headless(crm_url)
     except ImportError:
         return None, "CRM check unavailable"
     except Exception:

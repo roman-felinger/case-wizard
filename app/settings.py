@@ -5,7 +5,14 @@ from pathlib import Path
 
 try:
     import keyring
-    KEYRING_AVAILABLE = True
+    # Test if keyring backend is available
+    try:
+        # Simple test: try to get a dummy value
+        keyring.get_password("test", "test")
+        KEYRING_AVAILABLE = True
+    except Exception:
+        # Keyring imported but backend not working (e.g., on headless system)
+        KEYRING_AVAILABLE = False
 except ImportError:
     KEYRING_AVAILABLE = False
 
@@ -24,10 +31,11 @@ DEFAULTS = {
     "open_in_vscode": True,
 
     # Advanced settings (defaults optimized for speed)
+    # Note: case-solve always commits as it goes and never pushes on its
+    # own - that's not a toggle, so there's no "auto_commit" setting here.
     "run_tests": False,          # Skip tests (slow)
     "run_lint": False,           # Skip lint (slow)
     "run_build": False,          # Skip build (slow)
-    "auto_commit": True,         # Commit automatically (faster)
     "max_prs": 20,               # Fetch PRs (20 enough for context)
     "skip_ado": False,           # Get Azure DevOps context
     "include_style_prs": True,   # Include style examples (helps Claude)
@@ -40,13 +48,7 @@ def load_config():
     """Load all configuration (secrets from keyring, settings from file)."""
     config = dict(DEFAULTS)
 
-    # Load secrets from keyring
-    if KEYRING_AVAILABLE:
-        pat = keyring.get_password(SERVICE_NAME, "azdo_pat")
-        if pat:
-            config["azdo_pat"] = pat
-
-    # Load settings from file
+    # Load settings from file first (includes PAT if keyring failed on save)
     if CONFIG_FILE.exists():
         try:
             file_config = json.loads(CONFIG_FILE.read_text())
@@ -54,19 +56,37 @@ def load_config():
         except:
             pass
 
+    # Try to load secrets from keyring (overrides file config)
+    if KEYRING_AVAILABLE:
+        try:
+            pat = keyring.get_password(SERVICE_NAME, "azdo_pat")
+            if pat:
+                config["azdo_pat"] = pat
+        except Exception:
+            # Keyring failed, but PAT might be in file config already
+            pass
+
     return config
 
 
 def save_config(config):
-    """Save configuration securely."""
-    # Save secrets to keyring
-    if KEYRING_AVAILABLE:
-        if config.get("azdo_pat"):
-            keyring.set_password(SERVICE_NAME, "azdo_pat", config["azdo_pat"])
-
-    # Save non-secret settings to file
+    """Save configuration securely (keyring preferred, fallback to file)."""
     file_config = {k: v for k, v in config.items()
-                   if k not in ["azdo_pat", "claude_api_key"]}
+                   if k not in ["claude_api_key"]}
+
+    # Try to save PAT to keyring
+    pat_saved_to_keyring = False
+    if config.get("azdo_pat") and KEYRING_AVAILABLE:
+        try:
+            keyring.set_password(SERVICE_NAME, "azdo_pat", config["azdo_pat"])
+            pat_saved_to_keyring = True
+            # Remove from file config since it's in keyring
+            file_config.pop("azdo_pat", None)
+        except Exception:
+            # Keyring failed, will save to file instead
+            pass
+
+    # Save to file (includes PAT if keyring failed)
     CONFIG_FILE.write_text(json.dumps(file_config, indent=2))
 
 
@@ -81,33 +101,16 @@ def clear_secrets():
 
 
 def get_env_dict(config):
-    """Build environment dict for subprocess calls."""
-    env = os.environ.copy()
+    """Build environment dict for subprocess calls.
 
+    Only AZDO_PAT actually gets read by anything (lib/ado_api.py in each
+    stage) - org URL, skip-ADO, max PRs, model, run-tests/lint/build etc.
+    are CLI flags on the stage scripts instead, and show_stage_tab() in
+    main.py passes them that way. Don't add more env vars here without
+    also adding the os.environ.get() on the reading end - see git history
+    for what setting these without a reader looked like.
+    """
+    env = os.environ.copy()
     if config.get("azdo_pat"):
         env["AZDO_PAT"] = config["azdo_pat"]
-    if config.get("azdo_org_url"):
-        env["AZDO_ORG_URL"] = config["azdo_org_url"]
-    if config.get("azdo_project"):
-        env["AZDO_PROJECT"] = config["azdo_project"]
-
-    # Pass advanced settings as env vars for subprocess
-    if config.get("skip_ado"):
-        env["CASE_GUIDE_SKIP_ADO"] = "1"
-    if not config.get("auto_commit"):
-        env["CASE_SOLVE_NO_AUTO_COMMIT"] = "1"
-    if config.get("run_tests"):
-        env["CASE_SOLVE_RUN_TESTS"] = "1"
-    if config.get("run_lint"):
-        env["CASE_SOLVE_RUN_LINT"] = "1"
-    if config.get("run_build"):
-        env["CASE_SOLVE_RUN_BUILD"] = "1"
-    if config.get("max_prs"):
-        env["AZDO_MAX_PRS"] = str(config["max_prs"])
-    if config.get("claude_model"):
-        env["CLAUDE_MODEL"] = config["claude_model"]
-
     return env
-
-
-import os
