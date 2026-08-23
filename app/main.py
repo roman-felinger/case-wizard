@@ -13,7 +13,7 @@ from settings import (
 )
 from checks import run_health_check, get_startup_issues
 from progress import ProgressReporter, show_progress_stream, stream_subprocess_output
-from crm_check import check_crm_login_sync
+from crm_check import open_crm_in_browser, prompt_crm_login
 from azdo_check import check_azdo_access, get_azdo_test_message
 
 HERE = Path(__file__).parent
@@ -656,29 +656,33 @@ def show_config_wizard():
 
     col1, col2 = st.columns([2, 1])
     with col1:
-        if st.button("🔗 Check CRM Login", use_container_width=True, key="check_crm_btn"):
-            with st.spinner("🕐 Opening CRM and waiting for login (30 seconds)..."):
-                success, message = check_crm_login_sync(crm_url, timeout_seconds=30)
-
+        if st.button("🔗 Open CRM", use_container_width=True, key="open_crm_btn"):
+            success, message = prompt_crm_login(crm_url)
             st.session_state.crm_login_status = (success, message)
-
             if success:
-                st.success(f"✅ {message}")
+                st.success("✅ CRM opened - Please log in if needed, then click 'Confirm Logged In' below")
             else:
-                st.warning(f"⚠️ {message}")
+                st.error(f"❌ {message}")
 
     with col2:
-        # Show CRM status
+        # Show CRM status after opening
         if st.session_state.crm_login_status is not None:
             success, message = st.session_state.crm_login_status
             if success:
                 st.markdown("✅")
             else:
-                st.markdown("⚠️")
+                st.markdown("❌")
 
-    # For form validation, check if CRM was verified
-    crm_status = st.session_state.get("crm_login_status")
-    crm_ready = crm_status[0] is True if crm_status else False
+    # User confirms when logged in
+    crm_confirmed = st.checkbox(
+        "✅ Logged in to CRM",
+        value=False,
+        key="crm_confirmed_check",
+        help="Check this after you've logged into Dynamics 365"
+    )
+
+    # For form validation, check if CRM was confirmed
+    crm_ready = st.session_state.get("crm_confirmed_check", False) is True
 
     st.divider()
 
