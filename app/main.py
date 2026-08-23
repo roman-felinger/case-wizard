@@ -654,31 +654,35 @@ def show_config_wizard():
     if "crm_login_status" not in st.session_state:
         st.session_state.crm_login_status = None
 
-    col1, col2 = st.columns([2, 1])
+    # Open CRM in new tab using HTML
+    col1, col2 = st.columns([3, 1])
     with col1:
-        if st.button("🔗 Open CRM", use_container_width=True, key="open_crm_btn"):
-            success, message = prompt_crm_login(crm_url)
-            st.session_state.crm_login_status = (success, message)
-            if success:
-                st.success("✅ CRM opened - Please log in if needed, then click 'Confirm Logged In' below")
-            else:
-                st.error(f"❌ {message}")
-
+        # HTML link that opens in new tab of same browser
+        st.markdown(
+            f"""
+            <a href="{crm_url}" target="_blank" style="
+                display: inline-block;
+                padding: 8px 16px;
+                background-color: #0d7377;
+                color: white;
+                border-radius: 4px;
+                text-decoration: none;
+                font-weight: 500;
+            ">🔗 Open CRM in New Tab</a>
+            """,
+            unsafe_allow_html=True
+        )
     with col2:
-        # Show CRM status after opening
-        if st.session_state.crm_login_status is not None:
-            success, message = st.session_state.crm_login_status
-            if success:
-                st.markdown("✅")
-            else:
-                st.markdown("❌")
+        st.caption("(opens in new tab)")
+
+    st.caption("👉 Open CRM, log in if needed, then check the box below")
 
     # User confirms when logged in
     crm_confirmed = st.checkbox(
-        "✅ Logged in to CRM",
+        "✅ I'm logged in to CRM",
         value=False,
         key="crm_confirmed_check",
-        help="Check this after you've logged into Dynamics 365"
+        help="Check after logging into Dynamics 365 CRM in the new tab"
     )
 
     # For form validation, check if CRM was confirmed
