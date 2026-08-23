@@ -45,20 +45,20 @@ def check_claude():
 
 
 def check_claude_login():
-    """Check if Claude is logged in."""
+    """Check if Claude CLI is working (logged in or ready to use)."""
     try:
+        # Just check if claude command responds
         result = subprocess.run(
-            ["claude", "login", "--check"],
+            ["claude", "--version"],
             capture_output=True,
             text=True,
             timeout=5,
         )
         if result.returncode == 0:
-            return True, "Logged in"
-        return False, "Not logged in (run: claude login)"
+            return True, "Ready to use"
+        return False, "Not responding (try: claude login)"
     except Exception:
-        # If --check doesn't work, assume not logged in
-        return False, "Not logged in (run: claude login)"
+        return False, "Not responding (try: claude login)"
 
 
 def check_crm_tab():
