@@ -20,7 +20,7 @@ case-brief's `case_brief.py <code>` first) and the `claude` CLI installed + logg
 for any run that doesn't use `--show-prompt`.
 
 ```
-python -m unittest discover -s tests -v   # from case-guide/ -- 31 tests, mocked, no network
+python -m unittest discover -s tests -v   # from case-guide/ -- 63 tests, mocked, no network
 python -m pytest tests                    # equivalent, if pytest is installed
 ```
 

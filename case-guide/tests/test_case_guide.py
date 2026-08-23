@@ -13,6 +13,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import case_guide as cg
@@ -118,6 +119,164 @@ class StripCommentsTests(unittest.TestCase):
         self.assertNotIn("_comment", cleaned["azure_devops"])
         self.assertNotIn("_other_meta", cleaned["azure_devops"])
         self.assertEqual(cleaned["azure_devops"]["org_url"], None)
+
+
+class TruncateTests(unittest.TestCase):
+    def test_text_under_the_limit_passes_through_unchanged(self):
+        self.assertEqual(cg._truncate("hello", 10), "hello")
+
+    def test_text_exactly_at_the_limit_passes_through_unchanged(self):
+        self.assertEqual(cg._truncate("hello", 5), "hello")
+
+    def test_text_over_the_limit_is_capped_with_a_visible_truncation_note(self):
+        result = cg._truncate("hello world", 5, label="test detail", config_key="claude.test_key")
+        self.assertTrue(result.startswith("hello"))
+        self.assertIn("truncated", result)
+        self.assertIn("6 more character(s) of test detail omitted", result)
+        self.assertIn("claude.test_key", result)
+
+    def test_a_falsy_limit_disables_truncation(self):
+        long_text = "x" * 1000
+        self.assertEqual(cg._truncate(long_text, None), long_text)
+        self.assertEqual(cg._truncate(long_text, 0), long_text)
+
+
+class PickStyleProjectTests(unittest.TestCase):
+    def test_uses_the_configured_project_even_if_related_work_spans_others(self):
+        azure_cfg = {"project": "ConfiguredProj"}
+        detail = {"branches": [{"project": "Other"}], "pull_requests": []}
+        project, reason = cg._pick_style_project(azure_cfg, detail)
+        self.assertEqual(project, "ConfiguredProj")
+        self.assertIsNone(reason)
+
+    def test_falls_back_to_the_cases_single_matched_project_when_none_configured(self):
+        azure_cfg = {"project": None}
+        detail = {"branches": [{"project": "ProjA"}], "pull_requests": [{"project": "ProjA"}]}
+        project, reason = cg._pick_style_project(azure_cfg, detail)
+        self.assertEqual(project, "ProjA")
+        self.assertIsNone(reason)
+
+    def test_skips_with_a_reason_when_related_work_spans_multiple_projects(self):
+        azure_cfg = {"project": None}
+        detail = {"branches": [{"project": "ProjA"}], "pull_requests": [{"project": "ProjB"}]}
+        project, reason = cg._pick_style_project(azure_cfg, detail)
+        self.assertIsNone(project)
+        self.assertIn("ProjA", reason)
+        self.assertIn("ProjB", reason)
+
+    def test_skips_with_a_reason_when_there_is_no_related_work_to_infer_from(self):
+        azure_cfg = {"project": None}
+        project, reason = cg._pick_style_project(azure_cfg, None)
+        self.assertIsNone(project)
+        self.assertIn("no related branches/PRs", reason)
+
+
+class FormatAdoDetailTests(unittest.TestCase):
+    def test_no_incomplete_note_when_the_search_fully_succeeded(self):
+        detail = {
+            "branches": [{"project": "P", "repo": "R", "branch": "b", "commits": []}],
+            "pull_requests": [],
+            "warnings": [],
+        }
+        result = cg.format_ado_detail(detail, None)
+        self.assertNotIn("may be incomplete", result)
+
+    def test_folds_a_partial_search_warning_into_a_visible_note(self):
+        detail = {
+            "branches": [{"project": "P", "repo": "R", "branch": "b", "commits": []}],
+            "pull_requests": [],
+            "warnings": ["some PRs weren't checked"],
+        }
+        result = cg.format_ado_detail(detail, None)
+        self.assertIn("may be incomplete", result)
+        self.assertIn("Some PRs weren't checked.", result)
+
+    def test_a_capped_search_that_found_nothing_still_says_so_rather_than_claiming_a_clean_search(self):
+        detail = {"branches": [], "pull_requests": [], "warnings": ["the org has more than 50 projects"]}
+        result = cg.format_ado_detail(detail, None)
+        self.assertIn("No related branches or pull requests found", result)
+        self.assertIn("the org has more than 50 projects", result)
+
+    def test_a_hard_ado_error_is_reported_distinctly_from_a_clean_empty_search(self):
+        result = cg.format_ado_detail(None, "Azure DevOps rejected the request (401)")
+        self.assertIn("Could not fetch live Azure DevOps detail", result)
+        self.assertNotIn("No related branches or pull requests found", result)
+
+
+class FormatExampleGuideTests(unittest.TestCase):
+    def test_none_yields_a_placeholder_saying_no_example_exists_yet(self):
+        result = cg.format_example_guide(None)
+        self.assertIn("first one", result)
+
+    def test_existing_text_passes_through_unchanged(self):
+        text = "# Case T1 for Dummies\nsome content"
+        self.assertEqual(cg.format_example_guide(text), text)
+
+
+class GatherAdoDetailAuthErrorTests(unittest.TestCase):
+    """gather_ado_detail must surface AdoAuthError as an explicit,
+    distinguishable error -- never as a plain (empty-looking) result that
+    format_ado_detail would render as "nothing found", which is a very
+    different claim from "couldn't search because the PAT is bad"."""
+
+    def test_an_auth_error_finding_related_work_surfaces_as_an_explicit_error(self):
+        cfg = {"azure_devops": {"org_url": "https://dev.azure.com/org"}}
+        with mock.patch.object(cg.ado_api, "open_session", return_value=mock.Mock()), \
+             mock.patch.object(
+                 cg.ado_api, "find_related",
+                 side_effect=cg.ado_api.AdoAuthError("Azure DevOps rejected the request (401)"),
+             ):
+            detail, error = cg.gather_ado_detail(cfg, "T1")
+        self.assertIsNone(detail)
+        self.assertIn("401", error)
+        rendered = cg.format_ado_detail(detail, error)
+        self.assertIn("Could not fetch live Azure DevOps detail", rendered)
+        self.assertNotIn("No related branches or pull requests found", rendered)
+
+    def test_an_auth_error_during_per_branch_enrichment_also_surfaces_as_an_explicit_error(self):
+        cfg = {"azure_devops": {"org_url": "https://dev.azure.com/org"}}
+        branch = {"project": "P", "repo": "R", "branch": "b"}
+        with mock.patch.object(cg.ado_api, "open_session", return_value=mock.Mock()), \
+             mock.patch.object(cg.ado_api, "find_related", return_value=([branch], [], [])), \
+             mock.patch.object(
+                 cg.ado_api, "get_branch_commits",
+                 side_effect=cg.ado_api.AdoAuthError("Azure DevOps rejected the request (403)"),
+             ):
+            detail, error = cg.gather_ado_detail(cfg, "T1")
+        self.assertIsNone(detail)
+        self.assertIn("403", error)
+
+
+class ResolveExtraArgsTests(unittest.TestCase):
+    """_resolve_extra_args is the one exception to "CLI flags always win"
+    (see CLAUDE.md): --no-claude-extra-args has to be able to express "zero
+    extra args" even though a plain argparse append flag can only ever add,
+    never subtract -- worth locking in since getting this backwards would
+    silently keep a discouraged/stale config flag (e.g. a permission-mode
+    override) alive on a run that explicitly asked to drop it."""
+
+    def _args(self, no_claude_extra_args, claude_args):
+        return mock.Mock(no_claude_extra_args=no_claude_extra_args, claude_args=claude_args)
+
+    def test_no_extra_args_flag_with_nothing_explicit_yields_an_empty_list(self):
+        cfg = {"claude": {"extra_args": ["--from-config"]}}
+        args = self._args(no_claude_extra_args=True, claude_args=None)
+        self.assertEqual(cg._resolve_extra_args(args, cfg), [])
+
+    def test_no_extra_args_flag_still_honors_an_explicit_claude_arg(self):
+        cfg = {"claude": {"extra_args": ["--from-config"]}}
+        args = self._args(no_claude_extra_args=True, claude_args=["--explicit"])
+        self.assertEqual(cg._resolve_extra_args(args, cfg), ["--explicit"])
+
+    def test_without_the_flag_and_no_explicit_arg_config_extra_args_are_used(self):
+        cfg = {"claude": {"extra_args": ["--from-config"]}}
+        args = self._args(no_claude_extra_args=False, claude_args=None)
+        self.assertEqual(cg._resolve_extra_args(args, cfg), ["--from-config"])
+
+    def test_an_explicit_claude_arg_overrides_config_extra_args(self):
+        cfg = {"claude": {"extra_args": ["--from-config"]}}
+        args = self._args(no_claude_extra_args=False, claude_args=["--explicit"])
+        self.assertEqual(cg._resolve_extra_args(args, cfg), ["--explicit"])
 
 
 if __name__ == "__main__":
