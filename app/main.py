@@ -13,6 +13,7 @@ from settings import (
 )
 from checks import run_health_check, get_startup_issues
 from progress import ProgressReporter, show_progress_stream, stream_subprocess_output
+from crm_check import check_crm_login_sync
 
 HERE = Path(__file__).parent
 PROJECT_ROOT = HERE.parent
@@ -637,7 +638,7 @@ def show_config_wizard():
 
     # CRM Login Section (outside form, so button works)
     st.markdown("#### 🌐 Dynamics 365 CRM")
-    st.caption("Keep a browser tab open with Dynamics 365 CRM (logged in)")
+    st.caption("App will open CRM, wait for you to log in, then verify")
 
     # Input for CRM URL (pre-filled with saved value)
     crm_url = st.text_input(
@@ -648,19 +649,34 @@ def show_config_wizard():
         help="Your organization's Dynamics 365 CRM URL"
     )
 
+    # CRM status (stored in session state)
+    if "crm_login_status" not in st.session_state:
+        st.session_state.crm_login_status = None
+
     col1, col2 = st.columns([2, 1])
     with col1:
-        if st.button("🔗 Open CRM", use_container_width=True, key="open_crm_btn"):
-            import webbrowser
-            webbrowser.open(crm_url)
-            st.success(f"✓ Opening CRM at {crm_url}")
+        if st.button("🔗 Check CRM Login", use_container_width=True, key="check_crm_btn"):
+            with st.spinner("🕐 Opening CRM and waiting for login (30 seconds)..."):
+                success, message = check_crm_login_sync(crm_url, timeout_seconds=30)
+
+            st.session_state.crm_login_status = (success, message)
+
+            if success:
+                st.success(f"✅ {message}")
+            else:
+                st.warning(f"⚠️ {message}")
+
     with col2:
-        crm_ready_check = st.checkbox(
-            "✅ Logged in",
-            value=False,
-            key="crm_checkbox",
-            help="Check after logging in to CRM"
-        )
+        # Show CRM status
+        if st.session_state.crm_login_status is not None:
+            success, message = st.session_state.crm_login_status
+            if success:
+                st.markdown("✅")
+            else:
+                st.markdown("⚠️")
+
+    # For form validation, check if CRM was verified
+    crm_ready = st.session_state.get("crm_login_status", (None, None))[0] is True
 
     st.divider()
 
@@ -728,8 +744,8 @@ def show_config_wizard():
                 errors.append("Azure DevOps Organization URL is required")
             if not azdo_pat:
                 errors.append("Personal Access Token is required")
-            if not st.session_state.get("crm_checkbox", False):
-                errors.append("Please confirm you have Dynamics 365 CRM tab open and logged in")
+            if not crm_ready:
+                errors.append("Please verify CRM login by clicking 'Check CRM Login' above")
 
             if errors:
                 st.error("**Please fix these before continuing:**\n" + "\n".join(f"- {e}" for e in errors))
