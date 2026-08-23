@@ -165,6 +165,8 @@ Generate the exact steps now, one file at a time:
             cwd=self.workspace.repo_dir,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         return result.stdout or "(new file)"
 
@@ -249,6 +251,8 @@ Generate the exact steps now, one file at a time:
                 input=prompt,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=self.cfg["claude"]["timeout"],
             )
         except subprocess.TimeoutExpired:

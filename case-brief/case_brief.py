@@ -33,6 +33,15 @@ import os
 import re
 import sys
 
+# This script prints Unicode (checkmarks, arrows, etc.). Windows' default
+# console/subprocess-pipe encoding is the system ANSI codepage (e.g.
+# cp1250), not UTF-8, which crashes on those characters whether run
+# directly in a terminal or piped from case-wizard's subprocess call.
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from lib import ado_api, browser, bc_scrape, crm_scrape, report

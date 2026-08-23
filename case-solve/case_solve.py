@@ -39,6 +39,15 @@ import sys
 import textwrap
 from pathlib import Path
 
+# This script prints Unicode (checkmarks, arrows, etc.). Windows' default
+# console/subprocess-pipe encoding is the system ANSI codepage (e.g.
+# cp1250), not UTF-8, which crashes on those characters whether run
+# directly in a terminal or piped from case-wizard's subprocess call.
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 HERE = Path(__file__).parent
 CONFIG_PATH = HERE / "config.json"
 GUIDE_DIR = HERE.parent / "case-guide" / "case-guides"
@@ -286,6 +295,15 @@ def build_parser():
         action="store_true",
         help="Don't commit or modify anything (inspect changes only)",
     )
+    modes.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Skip the interactive yes/no confirmation before making changes "
+            "(for non-interactive callers, e.g. case-wizard's UI, which "
+            "confirms repo/branch itself before running this)"
+        ),
+    )
 
     # Verification
     verify = parser.add_argument_group("verification (auto-detect, can override)")
@@ -347,15 +365,26 @@ def main():
     # Resolve repo URL
     suggested_repo = extract_repo_suggestion(guide_text)
     if not args.repo:
-        repo_url = prompt_for_repo(suggested_repo)
+        if args.yes:
+            # --yes implies a non-interactive caller - input() would hang
+            # forever (or crash on EOF) waiting for a terminal that isn't
+            # there. Require --repo explicitly instead of guessing.
+            if not suggested_repo:
+                sys.exit("--yes requires --repo (no repo URL found in the guide to fall back on)")
+            repo_url = suggested_repo
+        else:
+            repo_url = prompt_for_repo(suggested_repo)
     else:
         repo_url = args.repo
     print(f"✓ Using repo: {repo_url}")
 
     # Confirm before making changes
     branch_name = f"case/{args.case_number}"
-    if not confirm_before_implementing(args.case_number, repo_url, branch_name):
-        return 1  # User cancelled
+    if not args.yes:
+        if not confirm_before_implementing(args.case_number, repo_url, branch_name):
+            return 1  # User cancelled
+    else:
+        print(f"\n✓ Proceeding without confirmation (--yes): {branch_name} in {extract_repo_name(repo_url)}")
 
     # Import heavy modules here (after arg parsing, config loading)
     from lib.workspace import WorkspaceManager

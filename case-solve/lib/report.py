@@ -95,7 +95,7 @@ class ReportGenerator:
 
         for i, change in enumerate(self.changes_summary, 1):
             file_path = (
-                change.file_path
+                change["file_path"]
                 if isinstance(change, dict)
                 else change.file_path
             )
@@ -104,6 +104,11 @@ class ReportGenerator:
                 if isinstance(change, dict)
                 else change.description
             )
+            diff = (
+                change.get("diff", "")
+                if isinstance(change, dict)
+                else getattr(change, "diff", "")
+            )
 
             lines.append(f"### Change {i}: {file_path}")
             lines.append("")
@@ -111,15 +116,15 @@ class ReportGenerator:
                 lines.append(f"**Description**: {description}")
                 lines.append("")
 
-            # Show diff if available
-            if isinstance(change, dict) and "diff" in change:
-                diff = change["diff"]
-                if diff:
-                    lines.append("```diff")
-                    lines.append(diff[:500])  # Limit diff display
-                    if len(diff) > 500:
-                        lines.append("... (truncated)")
-                    lines.append("```")
+            # Show diff if available - real callers pass Change dataclass
+            # instances (lib/implementer.py), not dicts, so this must not
+            # be gated on isinstance(change, dict) or it never fires.
+            if diff:
+                lines.append("```diff")
+                lines.append(diff[:500])  # Limit diff display
+                if len(diff) > 500:
+                    lines.append("... (truncated)")
+                lines.append("```")
             lines.append("")
 
         return lines

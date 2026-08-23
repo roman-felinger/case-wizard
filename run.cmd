@@ -48,9 +48,16 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Install dependencies
-echo [4/5] Checking dependencies...
-if not exist ".venv\.pip-installed" (
+REM Install dependencies - re-run whenever requirements.txt itself
+REM changes, not just once ever (a stale marker used to let new
+REM dependencies silently go uninstalled forever).
+echo [4/6] Checking dependencies...
+set "NEED_INSTALL=1"
+if exist ".venv\.pip-installed" (
+    fc /b "requirements.txt" ".venv\.pip-installed" >nul 2>&1
+    if not errorlevel 1 set "NEED_INSTALL=0"
+)
+if "%NEED_INSTALL%"=="1" (
     echo Installing from requirements.txt...
     pip install -q -r requirements.txt
     if errorlevel 1 (
@@ -59,14 +66,31 @@ if not exist ".venv\.pip-installed" (
         pause
         exit /b 1
     )
-    echo. > .venv\.pip-installed
+    copy /y "requirements.txt" ".venv\.pip-installed" >nul
     echo Dependencies installed
 ) else (
     echo Using cached dependencies
 )
 
+REM Install Playwright's Chromium - used for the CRM login check
+echo [5/6] Checking CRM browser...
+if not exist ".venv\.playwright-installed" (
+    echo Installing Chromium for CRM checks - one-time, about 115 MB...
+    python -m playwright install chromium
+    if errorlevel 1 (
+        echo ERROR: Failed to install Chromium
+        echo Try: python -m playwright install chromium
+        pause
+        exit /b 1
+    )
+    echo. > .venv\.playwright-installed
+    echo Chromium installed
+) else (
+    echo Using cached Chromium
+)
+
 REM Launch app
-echo [5/5] Starting case-wizard...
+echo [6/6] Starting case-wizard...
 echo.
 python -m streamlit run app/main.py
 if errorlevel 1 (
@@ -77,5 +101,6 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo.
-pause
+REM Clean exit - this also happens when the app auto-shuts-down after
+REM the last browser tab closes. No pause: just let the window close.
+exit /b 0

@@ -132,6 +132,9 @@ class Verifier:
                     ["npm", "run", "build"],
                     cwd=self.repo_dir,
                     capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=30,
                 )
                 if result.returncode == 0:
@@ -215,6 +218,8 @@ class Verifier:
                 cwd=self.repo_dir,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=120,
             )
 

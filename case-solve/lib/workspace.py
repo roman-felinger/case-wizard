@@ -139,6 +139,8 @@ class WorkspaceManager:
             cwd=repo_dir,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
         )
         return result.stdout.strip()
@@ -146,7 +148,10 @@ class WorkspaceManager:
     @staticmethod
     def _run_cmd(cmd, cwd=None, check=True):
         """Run a command, exit on error if check=True."""
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        # encoding="utf-8" (with errors="replace") because pip/npm/cargo
+        # output commonly includes Unicode (progress glyphs, checkmarks)
+        # that Windows' default console/pipe codepage can't decode.
+        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if check and result.returncode != 0:
             sys.exit(
                 f"Command failed: {' '.join(cmd)}\n"

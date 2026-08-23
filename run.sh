@@ -16,14 +16,25 @@ fi
 echo "Activating virtual environment..."
 source .venv/bin/activate
 
-# Only install if first run (marker file doesn't exist)
-if [ ! -f ".venv/.pip-installed" ]; then
-    echo "Installing dependencies (first run)..."
+# Re-run whenever requirements.txt itself changes, not just once ever
+# (a plain marker file lets new dependencies go uninstalled forever).
+if [ ! -f ".venv/.pip-installed" ] || ! cmp -s requirements.txt .venv/.pip-installed; then
+    echo "Installing dependencies..."
     pip install -q -r requirements.txt
-    touch .venv/.pip-installed
+    cp requirements.txt .venv/.pip-installed
     echo "✓ Dependencies installed"
 else
     echo "Using cached dependencies..."
+fi
+
+# Playwright's Chromium is used for the CRM login check (DOM-based)
+if [ ! -f ".venv/.playwright-installed" ]; then
+    echo "Installing Chromium for CRM checks (one-time, ~115 MB)..."
+    python -m playwright install chromium
+    touch .venv/.playwright-installed
+    echo "✓ Chromium installed"
+else
+    echo "Using cached Chromium..."
 fi
 
 echo "Starting case-wizard..."

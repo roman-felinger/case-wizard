@@ -67,11 +67,18 @@ class Committer:
         }
 
         for change in changes:
-            file_path = change.file_path if isinstance(change, dict) else change.file_path
+            file_path = change["file_path"] if isinstance(change, dict) else change.file_path
 
-            # Categorize
+            # Categorize - dependency-manifest filenames checked first since
+            # they're more specific than (and would otherwise be swallowed
+            # by) the generic .json/.txt extension checks below.
             if "test" in file_path.lower():
                 groups["Tests"].append(file_path)
+            elif any(
+                file_path.endswith(f)
+                for f in ["requirements.txt", "package.json", "Cargo.toml", ".csproj"]
+            ):
+                groups["Dependencies"].append(file_path)
             elif any(
                 file_path.endswith(ext)
                 for ext in [".json", ".yaml", ".yml", ".env", ".config"]
@@ -81,11 +88,6 @@ class Committer:
                 file_path.endswith(ext) for ext in [".md", ".txt", ".rst"]
             ):
                 groups["Documentation"].append(file_path)
-            elif any(
-                file_path.endswith(f)
-                for f in ["requirements.txt", "package.json", "Cargo.toml", ".csproj"]
-            ):
-                groups["Dependencies"].append(file_path)
             elif any(
                 file_path.endswith(ext)
                 for ext in [".py", ".js", ".ts", ".rs", ".cs", ".go", ".java"]
@@ -134,6 +136,8 @@ class Committer:
             cwd=self.repo_dir,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
 
         if result.returncode != 0:
