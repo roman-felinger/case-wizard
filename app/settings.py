@@ -16,7 +16,6 @@ SERVICE_NAME = "case-wizard"
 DEFAULTS = {
     # Secrets (stored in Credential Manager)
     "azdo_pat": None,
-    "claude_api_key": None,
 
     # Normal settings
     "azdo_org_url": None,
@@ -42,10 +41,9 @@ def load_config():
 
     # Load secrets from keyring
     if KEYRING_AVAILABLE:
-        for key in ["azdo_pat", "claude_api_key"]:
-            value = keyring.get_password(SERVICE_NAME, key)
-            if value:
-                config[key] = value
+        pat = keyring.get_password(SERVICE_NAME, "azdo_pat")
+        if pat:
+            config["azdo_pat"] = pat
 
     # Load settings from file
     if CONFIG_FILE.exists():
@@ -64,8 +62,6 @@ def save_config(config):
     if KEYRING_AVAILABLE:
         if config.get("azdo_pat"):
             keyring.set_password(SERVICE_NAME, "azdo_pat", config["azdo_pat"])
-        if config.get("claude_api_key"):
-            keyring.set_password(SERVICE_NAME, "claude_api_key", config["claude_api_key"])
 
     # Save non-secret settings to file
     file_config = {k: v for k, v in config.items()
@@ -80,10 +76,6 @@ def clear_secrets():
             keyring.delete_password(SERVICE_NAME, "azdo_pat")
         except:
             pass
-        try:
-            keyring.delete_password(SERVICE_NAME, "claude_api_key")
-        except:
-            pass
     CONFIG_FILE.unlink(missing_ok=True)
 
 
@@ -93,8 +85,6 @@ def get_env_dict(config):
 
     if config.get("azdo_pat"):
         env["AZDO_PAT"] = config["azdo_pat"]
-    if config.get("claude_api_key"):
-        env["CLAUDE_API_KEY"] = config["claude_api_key"]
     if config.get("azdo_org_url"):
         env["AZDO_ORG_URL"] = config["azdo_org_url"]
     if config.get("azdo_project"):

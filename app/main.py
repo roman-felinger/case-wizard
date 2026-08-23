@@ -20,9 +20,13 @@ def show_config_wizard():
     st.title("🧙 case-wizard Setup")
 
     st.markdown("""
-    **First run setup.** Your secrets are stored securely:
-    - 🔐 API Keys → Windows Credential Manager (encrypted in OS vault)
-    - 📁 Settings → Local config file
+    **First run setup.**
+
+    ⚠️ **You need Claude Code installed and logged in:**
+    ```bash
+    claude login
+    ```
+    Then verify: `claude --version`
     """)
 
     config = load_config()
@@ -43,13 +47,6 @@ def show_config_wizard():
             placeholder="Create at https://dev.azure.com/{org}/_usersSettings/tokens",
         )
 
-        claude_key = st.text_input(
-            "Claude API Key",
-            value=config.get("claude_api_key", ""),
-            type="password",
-            placeholder="Get at https://console.anthropic.com",
-        )
-
         st.markdown("### Optional")
 
         ado_project = st.text_input(
@@ -61,14 +58,13 @@ def show_config_wizard():
         submitted = st.form_submit_button("✅ Save & Continue", type="primary", use_container_width=True)
 
     if submitted:
-        if not org_url or not azdo_pat or not claude_key:
+        if not org_url or not azdo_pat:
             st.error("❌ Please fill in all required fields")
             return False
 
         config = {
             "azdo_org_url": org_url,
             "azdo_pat": azdo_pat,
-            "claude_api_key": claude_key,
             "azdo_project": ado_project or None,
         }
         config.update(DEFAULTS)
@@ -109,13 +105,6 @@ def show_settings_ui():
                     help="Token with Code (Read) scope"
                 )
 
-                claude_key = st.text_input(
-                    "Claude API Key",
-                    value=config.get("claude_api_key", ""),
-                    type="password",
-                    help="API key from console.anthropic.com"
-                )
-
                 open_vscode = st.checkbox(
                     "Open results in VS Code",
                     value=config.get("open_in_vscode", True),
@@ -129,7 +118,6 @@ def show_settings_ui():
                             "azdo_org_url": org_url,
                             "azdo_project": ado_project or None,
                             "azdo_pat": azdo_pat,
-                            "claude_api_key": claude_key,
                             "open_in_vscode": open_vscode,
                         })
                         save_config(config)
@@ -497,7 +485,7 @@ st.set_page_config(page_title="case-wizard", page_icon="🧙", layout="wide")
 if st.session_state.get("config_complete") is None:
     config = load_config()
     st.session_state.config_complete = bool(
-        config.get("azdo_pat") and config.get("claude_api_key") and config.get("azdo_org_url")
+        config.get("azdo_pat") and config.get("azdo_org_url")
     )
 
 if not st.session_state.get("config_complete"):
