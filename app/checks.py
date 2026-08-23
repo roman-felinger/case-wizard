@@ -73,17 +73,19 @@ def check_claude_login():
 
 
 def check_crm_tab():
-    """Check if CRM tab is accessible and logged in."""
-    # This is hard to check without browser automation
-    # Return as warning but note it's critical
-    return None, "Requires: Dynamics 365 browser tab (open + logged in)"
+    """Check if CRM tab is accessible and logged in (user-configurable)."""
+    # This is a user action (open CRM), not a system requirement
+    # Return as warning, not critical - user can configure in setup wizard
+    return None, "Dynamics 365: Configure in next step"
 
 
 def check_config(config):
-    """Check if config is set up."""
+    """Check if config is set up (warning, not critical)."""
     if config.get("azdo_pat") and config.get("azdo_org_url"):
         return True, f"ADO: {config['azdo_org_url']}"
-    return False, "Azure DevOps PAT or org URL missing"
+    # Return None (warning) instead of False (critical)
+    # This allows setup wizard to show config form
+    return None, "Azure DevOps: Configure in next step"
 
 
 def run_health_check(config):
