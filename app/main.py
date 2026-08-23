@@ -733,49 +733,7 @@ def show_config_wizard():
                     5. Copy and paste above
                     """)
 
-        # Verify ADO access button
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            if st.button("🔐 Check ADO Access", use_container_width=True, key="check_azdo_btn"):
-                if org_url and azdo_pat:
-                    with st.spinner("🕐 Testing Azure DevOps API..."):
-                        success, message = check_azdo_access(org_url, azdo_pat)
-                    st.session_state.azdo_status = (success, message)
-                else:
-                    st.session_state.azdo_status = (False, "Enter URL and PAT first")
-
-        with col2:
-            # Show ADO status
-            if st.session_state.azdo_status is not None:
-                success, message = st.session_state.azdo_status
-                if success:
-                    st.markdown("✅")
-                else:
-                    st.markdown("❌")
-
-        # Show result message
-        if st.session_state.azdo_status is not None:
-            success, message = st.session_state.azdo_status
-            if success:
-                st.success(message)
-            else:
-                st.error(message)
-
-        # For form validation
-        azdo_status = st.session_state.get("azdo_status")
-        azdo_verified = azdo_status[0] is True if azdo_status else False
-
-        st.divider()
-
-        # Show warnings that need attention
-        if warnings:
-            st.markdown("#### ⚠️ Warnings")
-            for check_name, message in warnings:
-                st.markdown(f"- **{check_name}:** {message}")
-
-        st.divider()
-
-        # Submit buttons
+        # Submit button
         submit = st.form_submit_button(
             "✅ Complete Setup",
             type="primary",
@@ -806,6 +764,45 @@ def show_config_wizard():
                 import time
                 time.sleep(1)
                 st.rerun()
+
+    # ADO Check Button - OUTSIDE FORM (after form ends)
+    st.divider()
+    st.markdown("#### 🔑 Verify Azure DevOps Access")
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        if st.button("🔐 Check ADO Access", use_container_width=True, key="check_azdo_btn"):
+            # Get current form values
+            form_org_url = st.session_state.get("org_url_input", config.get("azdo_org_url", ""))
+            form_azdo_pat = st.session_state.get("pat_input", config.get("azdo_pat", ""))
+
+            if form_org_url and form_azdo_pat:
+                with st.spinner("🕐 Testing Azure DevOps API..."):
+                    success, message = check_azdo_access(form_org_url, form_azdo_pat)
+                st.session_state.azdo_status = (success, message)
+            else:
+                st.session_state.azdo_status = (False, "Enter URL and PAT first")
+
+    with col2:
+        # Show ADO status
+        if st.session_state.azdo_status is not None:
+            success, message = st.session_state.azdo_status
+            if success:
+                st.markdown("✅")
+            else:
+                st.markdown("❌")
+
+    # Show result message
+    if st.session_state.azdo_status is not None:
+        success, message = st.session_state.azdo_status
+        if success:
+            st.success(message)
+        else:
+            st.error(message)
+
+    # For form validation - need to get values again
+    azdo_status = st.session_state.get("azdo_status")
+    azdo_verified = azdo_status[0] is True if azdo_status else False
 
     # Summary
     st.divider()
