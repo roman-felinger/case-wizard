@@ -1,27 +1,11 @@
 {
-  "_comment": "Copy this file to config.json and edit that copy -- config.json is gitignored, this example isn't. Every field here is optional: case_guide.py has a built-in default for all of them, and every one can also be set with a command-line flag (which wins over this file). Run `python case_guide.py -h` to see them.",
-
-  "brief_dir": "../case-brief/case-briefs",
-  "output_dir": "./case-guides",
-  "open_in_vscode": true,
+  "_comment": "Optional. Copy to config.json and edit. Every field has a CLI flag equivalent (run case_guide.py -h). Defaults work for most users.",
 
   "azure_devops": {
-    "_comment": "Same PAT/env-var as case-brief -- see case-brief/README.md for how to create one. project: leave null to search every project in the org. Skip this whole block (or pass --skip-ado) to use only what's already in the brief. style_pr_sample: how many of the project's other recent completed PRs to hand claude as a convention reference (branch/review/naming patterns) -- 0 disables, or pass --no-style-prs for one run.",
     "org_url": "https://dev.azure.com/yourorg",
-    "project": null,
-    "pat_env_var": "AZDO_PAT",
-    "max_prs": 50,
-    "style_pr_sample": 5
+    "project": null
   },
 
-  "claude": {
-    "_comment": "model: null uses claude's own default. extra_args: raw flags passed through to the claude CLI, e.g. [\"--permission-mode\", \"default\"] if you ever hit a permission prompt -- left empty by default since the prompt is pure text generation and shouldn't need one (a one-off run without them: --no-claude-extra-args). max_ado_detail_chars: caps the live Azure DevOps detail block so a case with a lot of related activity can't inline an unbounded amount of it into the prompt -- set to 0/null to disable. agent: the project-scoped .claude/agents/<name>.md Claude Code agent to run the call as -- null/empty (or --no-agent) falls back to claude's plain default persona. example_count: how many previous guides to include as a house-style example -- 0 disables, or pass --no-example. max_example_chars: same truncation idea as max_ado_detail_chars, for the house-style example block.",
-    "model": null,
-    "extra_args": [],
-    "timeout": 600,
-    "max_ado_detail_chars": 20000,
-    "agent": "case-guide-writer",
-    "example_count": 1,
-    "max_example_chars": 4000
-  }
+  "output_dir": "./case-guides",
+  "open_in_vscode": true
 }
