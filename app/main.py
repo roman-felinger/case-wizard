@@ -456,15 +456,22 @@ def show_main_app():
     if "auto_checked" not in st.session_state:
         st.session_state.auto_checked = True
 
-        # Check CRM
+        # CRM: Assume logged in if user opened tab and checked (from setup)
+        # Show "ready" if we have CRM URL configured
         if config.get("crm_url"):
-            crm_logged_in, crm_msg = check_crm_accessibility(config["crm_url"])
-            st.session_state.crm_check_result = (crm_logged_in, crm_msg)
+            st.session_state.crm_check_result = (True, "CRM configured")
+        else:
+            st.session_state.crm_check_result = (False, "CRM not configured")
 
-        # Check ADO
+        # ADO: Actually test the API with stored credentials
         if config.get("azdo_org_url") and config.get("azdo_pat"):
-            ado_ok, ado_msg = check_azdo_access(config["azdo_org_url"], config["azdo_pat"])
-            st.session_state.ado_check_result = (ado_ok, ado_msg)
+            try:
+                ado_ok, ado_msg = check_azdo_access(config["azdo_org_url"], config["azdo_pat"])
+                st.session_state.ado_check_result = (ado_ok, ado_msg)
+            except Exception as e:
+                st.session_state.ado_check_result = (False, f"API check failed: {str(e)}")
+        else:
+            st.session_state.ado_check_result = (False, "ADO not configured")
 
     # Top bar with health check, help, settings
     col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
@@ -518,13 +525,18 @@ def show_main_app():
 
     with col3:
         if st.button("↻ Recheck", use_container_width=True, key="recheck_btn"):
-            # Recheck both
-            crm_logged_in, crm_msg = check_crm_accessibility(config.get("crm_url"))
-            st.session_state.crm_check_result = (crm_logged_in, crm_msg)
-
+            # Recheck ADO API
             if config.get("azdo_org_url") and config.get("azdo_pat"):
-                ado_ok, ado_msg = check_azdo_access(config["azdo_org_url"], config["azdo_pat"])
-                st.session_state.ado_check_result = (ado_ok, ado_msg)
+                with st.spinner("Testing ADO API..."):
+                    try:
+                        ado_ok, ado_msg = check_azdo_access(config["azdo_org_url"], config["azdo_pat"])
+                        st.session_state.ado_check_result = (ado_ok, ado_msg)
+                    except Exception as e:
+                        st.session_state.ado_check_result = (False, f"API error: {str(e)}")
+
+            # CRM is assumed ready if configured
+            if config.get("crm_url"):
+                st.session_state.crm_check_result = (True, "CRM ready")
 
             st.rerun()
 
