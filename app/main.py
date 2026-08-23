@@ -1,4 +1,5 @@
 """case-wizard: Streamlit desktop app for case automation."""
+import json
 import os
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from settings import (
     KEYRING_AVAILABLE, CONFIG_FILE, DEFAULTS
 )
 from checks import run_health_check, get_startup_issues
+from progress import ProgressReporter, show_progress_stream, stream_subprocess_output
 
 HERE = Path(__file__).parent
 PROJECT_ROOT = HERE.parent
@@ -219,46 +221,113 @@ def show_stage_tab(stage_id, stage_name, stage_emoji, description, cmd_name, ski
         }
 
         cmd = [f"{cmd_name}.py", case_num, "--no-open"]
-        if stage_id != "solve":
-            cmd = [f"{cmd_name}.py", case_num, "--no-open"]
 
         with output_ph.container():
-            with st.spinner(f"⏳ Running {stage_name}..."):
-                try:
-                    result = subprocess.run(
-                        [sys.executable] + cmd,
-                        cwd=stage_dirs[stage_id],
-                        capture_output=True,
-                        text=True,
-                        timeout=600,
-                        env=env,
-                    )
+            # Progress reporter
+            reporter = ProgressReporter(
+                agent_name=f"case-{stage_id}",
+                operation_name=stage_name
+            )
 
-                    if result.returncode == 0:
-                        st.success(f"✅ {stage_name} completed successfully!")
-                        if result.stdout:
-                            with st.expander("📋 Output Details"):
-                                st.code(result.stdout, language="text")
-                        st.session_state.stage_complete = True
-                        st.rerun()
-                    else:
-                        st.error(f"❌ {stage_name} failed")
+            try:
+                reporter.update(f"Starting {stage_name}...", "running")
 
-                        # CRM detection
-                        if stage_id == "brief" and any(x in result.stderr.lower() for x in ["crm", "auth", "login"]):
-                            st.warning("""
-                            💡 **Possible CRM Login Issue:**
-                            - Make sure your Dynamics 365 browser tab is logged in
-                            - Try again after verifying
-                            """)
+                # Run subprocess and stream output
+                process = subprocess.Popen(
+                    [sys.executable] + cmd,
+                    cwd=str(stage_dirs[stage_id]),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    env=env,
+                )
 
-                        with st.expander("📋 Error Details"):
-                            st.code(result.stderr, language="text")
+                # Display progress container
+                progress_container = st.container(border=True)
+                progress_lines = []
+                output_lines = []
 
-                except subprocess.TimeoutExpired:
-                    st.error(f"❌ {stage_name} timed out (10+ minutes)")
-                except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
+                st.markdown(f"### 📊 {stage_name} Progress")
+
+                with progress_container:
+                    progress_ph = st.empty()
+                    output_ph_detail = st.empty()
+
+                # Stream output
+                for line in iter(process.stdout.readline, ""):
+                    if not line:
+                        break
+
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    output_lines.append(line)
+
+                    # Try to parse as progress JSON
+                    try:
+                        msg_data = json.loads(line)
+                        if "operation" in msg_data:
+                            operation = msg_data.get("operation", "")
+                            status = msg_data.get("status", "info")
+                            detail = msg_data.get("detail", "")
+                            progress_pct = msg_data.get("progress_pct")
+
+                            reporter.update(operation, status, detail, progress_pct)
+
+                            # Update display
+                            with progress_ph.container():
+                                for msg in reporter.messages[-15:]:
+                                    status_emoji = {
+                                        "running": "📍",
+                                        "success": "✅",
+                                        "error": "❌",
+                                        "warning": "⚠️",
+                                    }.get(msg.status, "ℹ️")
+
+                                    op = msg.operation
+                                    det = msg.detail
+                                    line_text = f"{status_emoji} {op}"
+                                    if det:
+                                        line_text += f"\n   *{det}*"
+                                    st.markdown(line_text)
+
+                    except json.JSONDecodeError:
+                        # Not JSON, just raw output
+                        progress_lines.append(line)
+
+                        with progress_ph.container():
+                            for p in progress_lines[-10:]:
+                                st.markdown(f"ℹ️ {p}")
+
+                returncode = process.wait(timeout=600)
+
+                if returncode == 0:
+                    reporter.success(f"{stage_name} completed")
+                    st.success(f"✅ {stage_name} completed successfully!")
+                    st.session_state.stage_complete = True
+                    st.rerun()
+                else:
+                    reporter.error(f"{stage_name} failed", f"Exit code {returncode}")
+                    st.error(f"❌ {stage_name} failed")
+
+                    # CRM detection
+                    if stage_id == "brief" and any(x in "\n".join(output_lines).lower() for x in ["crm", "auth", "login"]):
+                        st.warning("""
+                        💡 **Possible CRM Login Issue:**
+                        - Make sure your Dynamics 365 browser tab is logged in
+                        - Try again after verifying
+                        """)
+
+                    with st.expander("📋 Full Output"):
+                        st.code("\n".join(output_lines), language="text")
+
+            except subprocess.TimeoutExpired:
+                reporter.error("Timeout", f"Operation took over 10 minutes")
+                st.error(f"❌ {stage_name} timed out (10+ minutes)")
+            except Exception as e:
+                reporter.error("Error", str(e))
+                st.error(f"❌ Error: {str(e)}")
 
     st.divider()
 

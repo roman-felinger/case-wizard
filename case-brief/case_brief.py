@@ -34,7 +34,9 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from lib import ado_api, browser, bc_scrape, crm_scrape, report
+from lib.progress import progress, progress_success, progress_error, Phase
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
@@ -384,49 +386,66 @@ def main():
         [], [], [], [], None, False, ado_api.DEFAULT_MAX_PRS
     )
 
-    if args.demo:
-        crm_results, branches, pull_requests, bc_results = demo_data(args.case_number)
-    else:
-        if not args.skip_browser:
-            print("Connecting to the automation Chrome window...")
-            crm_results, bc_results = run_browser_scrape(cfg, case_number=args.case_number, include_bc=args.with_bc)
+    try:
+        if args.demo:
+            progress("Loading demo data...", status="running")
+            crm_results, branches, pull_requests, bc_results = demo_data(args.case_number)
+            progress_success("Demo data loaded")
+        else:
+            if not args.skip_browser:
+                progress("Connecting to automation Chrome window...", status="running")
+                crm_results, bc_results = run_browser_scrape(cfg, case_number=args.case_number, include_bc=args.with_bc)
+                progress_success("CRM data extracted", f"Found {len(crm_results)} cases")
 
-        if not args.skip_ado:
-            if not cfg["azure_devops"]["org_url"]:
-                ado_error = "no Azure DevOps org URL configured -- set azure_devops.org_url in config.json or pass --org-url"
-            else:
-                print("Searching Azure DevOps...")
-                case_for_search = args.case_number or (crm_results[0].get("ticket_number") if crm_results and not crm_results[0].get("error") else None)
-                if not case_for_search:
-                    ado_error = "no case number given and none found in an open CRM tab"
+            if not args.skip_ado:
+                progress("Querying Azure DevOps...", status="running")
+                if not cfg["azure_devops"]["org_url"]:
+                    ado_error = "no Azure DevOps org URL configured -- set azure_devops.org_url in config.json or pass --org-url"
+                    progress_error("Azure DevOps not configured", ado_error)
                 else:
-                    try:
-                        branches, pull_requests, prs_truncated, max_prs = ado_api.find_related(cfg["azure_devops"], case_for_search)
-                    except Exception as e:
-                        ado_error = str(e)
-                        print(f"  Azure DevOps lookup failed: {e}", file=sys.stderr)
+                    case_for_search = args.case_number or (crm_results[0].get("ticket_number") if crm_results and not crm_results[0].get("error") else None)
+                    if not case_for_search:
+                        ado_error = "no case number given and none found in an open CRM tab"
+                        progress_error("Case number not found", ado_error)
+                    else:
+                        try:
+                            branches, pull_requests, prs_truncated, max_prs = ado_api.find_related(cfg["azure_devops"], case_for_search)
+                            progress_success("Azure DevOps search complete", f"Found {len(branches)} branches, {len(pull_requests)} PRs")
+                        except Exception as e:
+                            ado_error = str(e)
+                            progress_error("Azure DevOps lookup failed", str(e))
 
-    case_number = args.case_number
-    if not case_number and crm_results and not crm_results[0].get("error"):
-        case_number = crm_results[0].get("ticket_number")
-    case_number = case_number or "unlabeled"
+        case_number = args.case_number
+        if not case_number and crm_results and not crm_results[0].get("error"):
+            case_number = crm_results[0].get("ticket_number")
+        case_number = case_number or "unlabeled"
 
-    suggested_repos = []
-    if not args.demo:
-        suggested_repos = resolve_suggested_repos(cfg, args, crm_results)
+        progress("Resolving repositories...", status="running")
+        suggested_repos = []
+        if not args.demo:
+            suggested_repos = resolve_suggested_repos(cfg, args, crm_results)
+        progress_success("Repositories resolved")
 
-    markdown = report.build_markdown(
-        case_number, crm_results, branches, pull_requests, bc_results,
-        ado_error=ado_error, include_bc=args.with_bc or args.demo,
-        prs_truncated=prs_truncated, max_prs=max_prs, suggested_repos=suggested_repos,
-    )
-    path = report.write_and_open(
-        markdown,
-        os.path.join(HERE, cfg["output_dir"]),
-        case_number,
-        open_in_vscode=cfg["open_in_vscode"] and not args.no_open,
-    )
-    print(f"\nBrief written to {path}")
+        progress("Building markdown brief...", status="running")
+        markdown = report.build_markdown(
+            case_number, crm_results, branches, pull_requests, bc_results,
+            ado_error=ado_error, include_bc=args.with_bc or args.demo,
+            prs_truncated=prs_truncated, max_prs=max_prs, suggested_repos=suggested_repos,
+        )
+        progress_success("Brief markdown built")
+
+        progress("Writing to file...", status="running")
+        path = report.write_and_open(
+            markdown,
+            os.path.join(HERE, cfg["output_dir"]),
+            case_number,
+            open_in_vscode=cfg["open_in_vscode"] and not args.no_open,
+        )
+        progress_success("Brief complete", f"Written to {path}")
+
+    except Exception as e:
+        progress_error("Brief generation failed", str(e))
+        raise
 
 
 if __name__ == "__main__":
