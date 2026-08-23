@@ -14,6 +14,7 @@ from settings import (
 from checks import run_health_check, get_startup_issues
 from progress import ProgressReporter, show_progress_stream, stream_subprocess_output
 from crm_check import check_crm_login_sync
+from azdo_check import check_azdo_access, get_azdo_test_message
 
 HERE = Path(__file__).parent
 PROJECT_ROOT = HERE.parent
@@ -689,14 +690,20 @@ def show_config_wizard():
         st.markdown("#### 🔑 Azure DevOps Access")
         st.caption("Your organization URL and personal access token")
 
+        # Initialize ADO status in session state
+        if "azdo_status" not in st.session_state:
+            st.session_state.azdo_status = None
+
+        # Org URL input
         org_url = st.text_input(
             "Organization URL",
             value=config.get("azdo_org_url", ""),
             placeholder="https://dev.azure.com/myorg",
             key="org_url_input",
-            help="Your Azure DevOps organization (e.g., https://dev.azure.com/contoso)"
+            help="Your Azure DevOps organization (e.g., https://dev.azure.com/myorg)"
         )
 
+        # PAT input + help button
         col1, col2 = st.columns([3, 1])
         with col1:
             azdo_pat = st.text_input(
@@ -705,7 +712,7 @@ def show_config_wizard():
                 type="password",
                 key="pat_input",
                 placeholder="Paste your PAT here",
-                help="Token with Code (Read) and Project and Team (Read) scopes. Never share!"
+                help="Token with Code (Read) and Project and Team (Read) scopes"
             )
         with col2:
             st.caption(" ")
@@ -718,6 +725,37 @@ def show_config_wizard():
                     4. Scopes: ✅ Code (Read), ✅ Project and Team (Read)
                     5. Copy and paste above
                     """)
+
+        # Verify ADO access button
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            if st.button("🔐 Check ADO Access", use_container_width=True, key="check_azdo_btn"):
+                if org_url and azdo_pat:
+                    with st.spinner("🕐 Testing Azure DevOps API..."):
+                        success, message = check_azdo_access(org_url, azdo_pat)
+                    st.session_state.azdo_status = (success, message)
+                else:
+                    st.session_state.azdo_status = (False, "Enter URL and PAT first")
+
+        with col2:
+            # Show ADO status
+            if st.session_state.azdo_status is not None:
+                success, message = st.session_state.azdo_status
+                if success:
+                    st.markdown("✅")
+                else:
+                    st.markdown("❌")
+
+        # Show result message
+        if st.session_state.azdo_status is not None:
+            success, message = st.session_state.azdo_status
+            if success:
+                st.success(message)
+            else:
+                st.error(message)
+
+        # For form validation
+        azdo_verified = st.session_state.get("azdo_status", (None, None))[0] is True
 
         st.divider()
 
@@ -740,12 +778,10 @@ def show_config_wizard():
         if submit:
             errors = []
 
-            if not org_url:
-                errors.append("Azure DevOps Organization URL is required")
-            if not azdo_pat:
-                errors.append("Personal Access Token is required")
             if not crm_ready:
                 errors.append("Please verify CRM login by clicking 'Check CRM Login' above")
+            if not azdo_verified:
+                errors.append("Please verify Azure DevOps access by clicking 'Check ADO Access' above")
 
             if errors:
                 st.error("**Please fix these before continuing:**\n" + "\n".join(f"- {e}" for e in errors))
