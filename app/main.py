@@ -480,45 +480,148 @@ def show_main_app():
 
 
 def show_config_wizard():
-    """Show initial config wizard."""
-    st.title("🧙 case-wizard Setup")
+    """Show initial config wizard with health checks."""
+    st.title("🧙 case-wizard First-Time Setup")
 
-    st.markdown("""
-    **Claude Code Login Required:**
-    ```bash
-    claude login
-    ```
-    """)
+    # Step 1: System Requirements Check
+    st.markdown("### Step 1: System Requirements")
+    st.markdown("**Checking your system...**")
 
     config = load_config()
+    health = run_health_check(config)
+    critical, warnings = get_startup_issues(health)
+
+    # Display health checks
+    with st.container(border=True):
+        for check_name, result in health.items():
+            col1, col2, col3 = st.columns([0.8, 2, 2])
+            with col1:
+                if result["status"] is True:
+                    st.markdown("✅")
+                elif result["status"] is False:
+                    st.markdown("❌")
+                else:
+                    st.markdown("⚠️")
+            with col2:
+                st.markdown(f"**{check_name}**")
+            with col3:
+                st.caption(result["message"])
+
+    # Block if critical issues
+    if critical:
+        st.error("### ❌ Critical Issues Found")
+        st.markdown("**You need to fix these before continuing:**\n")
+        for check_name, message in critical:
+            st.markdown(f"- **{check_name}:** {message}")
+
+        st.divider()
+
+        # Show specific fixes
+        st.markdown("### How to Fix")
+
+        if any("Claude" in name for name, _ in critical):
+            st.markdown("""
+            **Install Claude Code:**
+            1. Go to https://claude.com/claude-code
+            2. Download and install for your OS
+            3. Run `claude login` in terminal
+            4. Return here and refresh
+            """)
+
+        if any("Git" in name for name, _ in critical):
+            st.markdown("""
+            **Install Git:**
+            1. Go to https://git-scm.com
+            2. Download and install
+            3. Restart terminal
+            4. Verify: `git --version`
+            """)
+
+        if any("Python" in name for name, _ in critical):
+            st.markdown("""
+            **Install Python 3.8+:**
+            1. Go to https://python.org
+            2. Download and install
+            3. Check "Add Python to PATH"
+            4. Restart terminal
+            5. Verify: `python --version`
+            """)
+
+        st.info("⏳ After fixing, press F5 to refresh and continue.")
+        return
+
+    # Show warnings (but allow continuing)
+    if warnings:
+        with st.container(border=True):
+            st.warning("⚠️ **Warnings** (you can continue, but verify these)")
+            for check_name, message in warnings:
+                st.markdown(f"- **{check_name}:** {message}")
+
+    st.divider()
+
+    # Step 2: Configure Azure DevOps
+    st.markdown("### Step 2: Configure Azure DevOps")
+    st.markdown("**Enter your organization details:**")
 
     with st.form("config_form"):
         org_url = st.text_input(
-            "Azure DevOps Org URL",
+            "Organization URL",
             value=config.get("azdo_org_url", ""),
             placeholder="https://dev.azure.com/yourorg",
+            help="Your Azure DevOps organization URL"
         )
 
         azdo_pat = st.text_input(
-            "Azure DevOps PAT",
+            "Personal Access Token (PAT)",
             value=config.get("azdo_pat", ""),
             type="password",
-            placeholder="Create at dev.azure.com",
+            placeholder="Paste your PAT",
+            help="Token with Code (Read) and Project and Team (Read) scopes"
         )
 
-        if st.form_submit_button("✅ Continue", type="primary", use_container_width=True):
-            if not org_url or not azdo_pat:
-                st.error("Please fill in required fields")
-                return
+        st.markdown("**Where to get these:**")
+        st.caption("""
+        1. Organization URL: https://dev.azure.com/{yourorg}
+        2. PAT: https://dev.azure.com/{yourorg}/_usersSettings/tokens
+           - Click "New Token"
+           - Scopes: Code (Read) + Project and Team (Read)
+        """)
 
-            config = {
-                "azdo_org_url": org_url,
-                "azdo_pat": azdo_pat,
-            }
-            config.update(DEFAULTS)
-            save_config(config)
-            st.session_state.config_complete = True
-            st.rerun()
+        st.divider()
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.form_submit_button("✅ Complete Setup", type="primary", use_container_width=True):
+                if not org_url or not azdo_pat:
+                    st.error("Please fill in all required fields")
+                    return
+
+                config = {
+                    "azdo_org_url": org_url,
+                    "azdo_pat": azdo_pat,
+                }
+                config.update(DEFAULTS)
+                save_config(config)
+                st.session_state.config_complete = True
+                st.rerun()
+
+        with col2:
+            st.button("❌ Exit", disabled=True, use_container_width=True)
+
+    # Summary
+    st.divider()
+    st.markdown("### What's Next?")
+    st.markdown("""
+    After setup:
+    1. Enter a case number (e.g., T2611845)
+    2. Choose a stage (Brief, Guide, or Solve)
+    3. Click ▶ Run to start automation
+
+    **Each stage does:**
+    - **Brief:** Gathers context from CRM + ADO
+    - **Guide:** Creates AI-powered walkthrough
+    - **Solve:** Auto-implements changes
+    """)
 
 
 # Main
