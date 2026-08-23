@@ -1,6 +1,6 @@
 # case-wizard: All-in-one automation suite
 # Core UI
-streamlit>=1.28.0
+streamlit>=1.32.0
 
 # HTTP and data
 requests>=2.31.0

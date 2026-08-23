@@ -10,6 +10,7 @@ __pycache__/
 .streamlit_config.json
 case-brief/.token_cache/
 case-brief/.last_urls.json
+app/.crm_profile/
 
 # Generated output
 case-brief/case-briefs/*.md

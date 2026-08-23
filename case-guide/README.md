@@ -34,6 +34,6 @@ Edit `config.json` (optional) or use CLI flags. See `config.example.json`.
 ## Testing
 
 ```bash
-python -m pytest tests          # or unittest
-python case_guide.py --demo     # sample data, no API calls
+python -m unittest discover -s tests -v   # 63 tests, mocked, no network
+python case_guide.py T2611845 --show-prompt   # assembles the real prompt, no claude call
 ```

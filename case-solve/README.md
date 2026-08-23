@@ -1,10 +1,12 @@
 # case-solve
 
-Auto-implement changes from a case guide: clone repo, create branch, apply changes, run tests, commit.
+Reads a case guide, clones the repo, implements the changes with Claude, verifies,
+and commits. Never pushes — you review and push yourself.
 
 ## Setup
 
-```bash
+```powershell
+python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
@@ -12,38 +14,80 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
-python case_solve.py T2611845
-python case_solve.py T2611845 --show-plan       # preview plan, no apply
-python case_solve.py T2611845 --dry-run         # preview changes, no commit
-python case_solve.py T2611845 --repo PROJ/NAME  # specify repo, don't prompt
-python case_solve.py T2611845 --no-implement    # setup only, no changes
-python case_solve.py -h                         # all options
+python case_solve.py T2611845 --repo https://dev.azure.com/org/proj/_git/repo
+python case_solve.py T2611845 --repo <url> --show-plan    # preview plan, no apply
+python case_solve.py T2611845 --repo <url> --dry-run      # preview changes, no commit
+python case_solve.py T2611845 --repo <url> --no-implement # branch only, no changes
+python case_solve.py T2611845 --repo <url> --yes          # skip interactive confirm
+python case_solve.py -h                                   # all options
 ```
 
+Omit `--repo` in a real terminal and it prompts, suggesting a URL found in the guide
+if there is one. `--yes` skips both the repo prompt and the confirmation prompt —
+required for any non-interactive caller (e.g. case-wizard's own app), since there's
+no terminal there to answer either one.
+
 Requires:
-- Guide from `case-guide` (reads `../case-guide/case-guides/case-<code>-for-dummies.md`)
-- Claude CLI (`claude` on PATH)
+- A guide already written by `case-guide` (reads
+  `../case-guide/case-guides/case-<code>-for-dummies.md`)
+- Claude CLI (`claude` on PATH, logged in)
 - Git configured
-- Internet (to clone repos)
+- Network access to clone the repo
 
-Output:
-- Cloned repo in `case-solves/repos/<repo>/` on branch `case/<code>`
-- Checklist in `case-solves/<code>/VERIFICATION_CHECKLIST.md`
-
-## What It Does
+## What it does
 
 1. Reads the guide
-2. Suggests repo from guide, prompts for URL (or use `--repo`)
-3. Clones/fetches repo, creates case branch
-4. Auto-detects dependency manager (pip/npm/cargo/dotnet), installs
-5. Claude reads guide + repo, generates implementation plan
-6. Applies changes file-by-file
+2. Resolves the repo URL (`--repo`, or a suggestion from the guide, or asks)
+3. Clones/fetches the repo, creates branch `case/<code>`
+4. Auto-detects the dependency manager and installs
+5. Claude reads the guide + repo structure, generates an implementation plan, then
+   file-by-file steps
+6. Applies the changes
 7. Auto-detects and runs tests/lint/build
 8. Groups changes into logical commits
-9. Outputs verification checklist
+9. Writes a verification checklist
 
-Nothing is pushed automatically. You review and push manually.
+Output:
+- Cloned repo: `case-solves/repos/<repo-name>/` (branch `case/<code>`) — cached and
+  reused across runs
+- Checklist: `case-solves/case-<code>/VERIFICATION_CHECKLIST.md`
+
+### Review and push
+
+```powershell
+code case-solves/case-T2611845/VERIFICATION_CHECKLIST.md
+# run the manual checks it lists, then:
+cd case-solves/repos/myrepo
+git push -u origin case/T2611845
+# open a PR, mention the case number in the title
+```
+
+### What gets auto-detected
+
+| | Dependency install | Tests | Lint | Build |
+|---|---|---|---|---|
+| Python | `requirements.txt` → pip | pytest / unittest | black, pylint | `setup.py build` |
+| Node.js | `package.json` → npm | npm test | eslint | npm build |
+| Rust | `Cargo.toml` → cargo | cargo test | cargo clippy | cargo build |
+| .NET | `*.csproj` → dotnet restore | dotnet test | — | dotnet build |
+
+A project using different tools won't get auto-verified — check it manually in
+`case-solves/repos/<repo>/` with its normal commands.
 
 ## Config
 
-Edit `config.json` (optional) or use CLI flags. See `config.example.json`.
+Edit `config.json` (optional, see `config.example.json`) or use CLI flags — flags
+always win. Nothing requires editing the config file.
+
+## Troubleshooting
+
+- **"Claude call failed"** — install [Claude Code](https://claude.com/claude-code),
+  confirm `claude --version` and `claude login` both work.
+- **"Guide not found"** — run case-guide first:
+  `cd ../case-guide && python case_guide.py T2611845`.
+- **"Git clone failed"** — verify `git clone <url>` works manually; use an HTTPS URL
+  if SSH keys aren't set up.
+- **Tests fail during verification** — `--skip-tests` to bypass, or debug directly in
+  `case-solves/repos/<repo>/`.
+
+See `CLAUDE.md` for architecture notes.

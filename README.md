@@ -2,70 +2,91 @@
 
 **Automate support cases: brief → guide → implement.**
 
-Three-stage automation that turns a support case into a committed feature branch.
-
 ```
 Brief (gather context) → Guide (AI walkthrough) → Solve (auto-implement)
 ```
 
+Three independent scripts (`case-brief`, `case-guide`, `case-solve`), driven from one
+desktop app (`app/`, Streamlit) or run by hand.
+
 ## Quick Start
 
-**Windows:** Double-click `run.cmd`  
-**Mac/Linux:** `./run.sh`  
-**Python:** `python -m streamlit run app/main.py`
+**Windows:** double-click `run.cmd`
+**Mac/Linux:** `./run.sh`
+**Any OS:** `python -m streamlit run app/main.py`
 
-First run:
-1. Installs dependencies (~30 sec)
-2. Opens at `http://localhost:8501`
-3. Shows config wizard (enter API keys once, no CLI needed)
-4. Ready to automate!
+First run installs dependencies and Chromium (~1 min total, cached after that), then
+opens `http://localhost:8501`.
+
+## First-Time Setup
+
+The app checks everything it needs on its own:
+
+- **Python, Git, Claude CLI, Claude login** — auto-verified, no input needed. If
+  something's missing, it tells you exactly what to install.
+- **Azure DevOps** — paste an org URL and a [PAT](https://dev.azure.com/_usersSettings/tokens)
+  (scopes: Code Read, Project and Team Read), click **Check Connection**. Works →
+  saved to Windows Credential Manager automatically, nothing to re-enter.
+- **CRM (Dynamics 365)** — checked automatically via a dedicated browser window the
+  app controls (separate from your normal browser). If not logged in, click
+  **Log in to CRM**; the window closes itself the moment login succeeds. The session
+  persists, so this is normally a one-time thing.
+
+Once both are green, the wizard never appears again — you get a one-line
+"✅ All systems ready" status with a Recheck button. Change org URL, model, or
+run-tests/lint/build defaults later in the **Settings** tab.
 
 ## The Three Stages
 
 ### 1. case-brief
-Gather case context from CRM, Azure DevOps, Business Central.  
-Output: `case-briefs/case-<number>.md`
+Gathers case context from CRM + Azure DevOps (+ optional Business Central).
+Output: `case-brief/case-briefs/case-<number>.md`
 
 ### 2. case-guide
-Turn brief into a step-by-step walkthrough using Claude.  
-Output: `case-guides/case-<number>-for-dummies.md`
+Turns the brief into a step-by-step walkthrough via a headless `claude` call.
+Output: `case-guide/case-guides/case-<number>-for-dummies.md`
 
 ### 3. case-solve
-Auto-implement changes, run tests, create commits, verify.  
-Output: `case-solves/<number>/VERIFICATION_CHECKLIST.md`
+Clones the repo, implements the guide's plan, runs tests/lint/build, commits as it
+goes. Never pushes — you review and push yourself.
+Output: `case-solve/case-solves/case-<number>/VERIFICATION_CHECKLIST.md`
 
 ## Requirements
 
-- Python 3.8+
-- Dynamics 365 CRM (with browser tab open)
-- Azure DevOps PAT (enter in config wizard on first run)
-- Claude API key (enter in config wizard on first run)
+- Python 3.8+, Git
+- [Claude Code](https://claude.com/claude-code) installed and logged in (`claude login`
+  — no API key needed)
+- Dynamics 365 CRM access (any account with case access)
+- An Azure DevOps [PAT](https://dev.azure.com/_usersSettings/tokens) (self-service,
+  no admin approval needed)
 
-## Configuration
+## Manual Run (no app)
 
-Create `config.json` in each stage directory (see `config.example.json`).
-
-Each stage also supports CLI flags (`-h` to see all).
-
-## Manual Run
+Each stage is a standalone script with its own `-h` for the full flag list; the app
+just wraps these with a UI. Use the repo-root `.venv` (it already has everything all
+three stages need):
 
 ```bash
-# One at a time:
-cd case-brief && python case_brief.py T2611845
-cd ../case-guide && python case_guide.py T2611845
-cd ../case-solve && python case_solve.py T2611845
+.venv\Scripts\activate         # Windows
+source .venv/bin/activate      # Mac/Linux
 
-# Or use the desktop app (recommended)
-python -m streamlit run app/main.py
+python case-brief/case_brief.py T2611845
+python case-guide/case_guide.py T2611845
+python case-solve/case_solve.py T2611845 --repo https://dev.azure.com/org/proj/_git/repo
 ```
+
+`config.json` in each stage directory (see its `config.example.json`) is optional —
+every setting there also has a CLI flag override, and the app always passes flags
+explicitly rather than relying on a stage's local config file.
 
 ## Status
 
-- ✅ Brief: CRM + ADO working, BC selectors in progress
-- ✅ Guide: Stable, requires Claude API key
-- ✅ Solve: Stable, auto-detects repo structure
-- ✅ Desktop app: Streamlit UI, simple and fast
+- **Brief:** CRM + ADO working; Business Central scraping still has selector gaps
+  (off by default, `--with-bc` to try it)
+- **Guide:** stable, has a 63-test suite (`case-guide/tests/`)
+- **Solve:** MVP — clone/branch/dependency-install verified; a real end-to-end Claude
+  implementation run against a live repo is the main thing left to exercise
+- **App:** Streamlit desktop UI; auto-shuts-down ~15s after the last browser tab
+  closes
 
-## License
-
-See LICENSE file.
+See `TROUBLESHOOT.md` if something's red and you're not sure why.
