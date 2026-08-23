@@ -1,72 +1,18 @@
 """case-wizard: Streamlit desktop app for case automation."""
-import json
 import os
 import subprocess
 import sys
 from pathlib import Path
-from datetime import datetime
 
 import streamlit as st
 
-try:
-    import keyring
-    KEYRING_AVAILABLE = True
-except ImportError:
-    KEYRING_AVAILABLE = False
+from settings import (
+    load_config, save_config, clear_secrets, get_env_dict,
+    KEYRING_AVAILABLE, CONFIG_FILE, DEFAULTS
+)
 
 HERE = Path(__file__).parent
 PROJECT_ROOT = HERE.parent
-CONFIG_FILE = HERE / ".streamlit_config.json"
-SERVICE_NAME = "case-wizard"
-
-
-def load_config():
-    """Load configuration (secrets from keyring, settings from file)."""
-    config = {}
-
-    # Try keyring first (secure)
-    if KEYRING_AVAILABLE:
-        for key in ["azdo_pat", "claude_api_key"]:
-            value = keyring.get_password(SERVICE_NAME, key)
-            if value:
-                config[key] = value
-
-    # Load non-secret settings from file
-    if CONFIG_FILE.exists():
-        try:
-            file_config = json.loads(CONFIG_FILE.read_text())
-            # Only load non-secret settings
-            for key in ["azdo_org_url", "azdo_project"]:
-                if key in file_config:
-                    config[key] = file_config[key]
-        except:
-            pass
-
-    return config
-
-
-def save_config(config):
-    """Save configuration securely.
-
-    Secrets go to OS Credential Manager (Windows), Keychain (Mac), or Secret Service (Linux).
-    Non-secrets go to JSON file.
-    """
-    # Save secrets to keyring (secure OS storage)
-    if KEYRING_AVAILABLE:
-        if config.get("azdo_pat"):
-            keyring.set_password(SERVICE_NAME, "azdo_pat", config["azdo_pat"])
-        if config.get("claude_api_key"):
-            keyring.set_password(SERVICE_NAME, "claude_api_key", config["claude_api_key"])
-    else:
-        # Fallback to JSON if keyring not available (not ideal)
-        st.warning("⚠️ keyring not available. Secrets stored in plain text. Consider reinstalling.")
-
-    # Save non-secret settings to JSON
-    file_config = {
-        "azdo_org_url": config.get("azdo_org_url"),
-        "azdo_project": config.get("azdo_project"),
-    }
-    CONFIG_FILE.write_text(json.dumps(file_config, indent=2))
 
 
 def show_config_wizard():
@@ -76,46 +22,39 @@ def show_config_wizard():
     st.markdown("""
     **First run setup.** Your secrets are stored securely:
     - 🔐 API Keys → Windows Credential Manager (encrypted in OS vault)
-    - 📁 URLs → Local config file (plain text, OK)
+    - 📁 Settings → Local config file
     """)
 
     config = load_config()
 
     with st.form("config_form"):
-        st.markdown("### Azure DevOps")
-        st.caption("Required for gathering case context")
+        st.markdown("### Required Settings")
 
         org_url = st.text_input(
-            "Organization URL",
+            "Azure DevOps Organization URL",
             value=config.get("azdo_org_url", ""),
             placeholder="https://dev.azure.com/yourorg",
-            help="Your Azure DevOps org URL"
         )
 
         azdo_pat = st.text_input(
-            "Personal Access Token (PAT)",
+            "Azure DevOps PAT",
             value=config.get("azdo_pat", ""),
             type="password",
-            placeholder="Enter your ADO PAT",
-            help="Create at https://dev.azure.com/{org}/_usersSettings/tokens — stored in Credential Manager"
+            placeholder="Create at https://dev.azure.com/{org}/_usersSettings/tokens",
         )
-
-        st.markdown("### Claude")
-        st.caption("Required for guide generation and implementation")
 
         claude_key = st.text_input(
             "Claude API Key",
             value=config.get("claude_api_key", ""),
             type="password",
-            placeholder="sk-...",
-            help="Get at https://console.anthropic.com — stored in Credential Manager"
+            placeholder="Get at https://console.anthropic.com",
         )
 
         st.markdown("### Optional")
 
         ado_project = st.text_input(
-            "Azure DevOps Project (optional)",
-            value=config.get("azdo_project", ""),
+            "Azure DevOps Project",
+            value=config.get("azdo_project", "") or "",
             placeholder="Leave empty to search all projects",
         )
 
@@ -132,16 +71,179 @@ def show_config_wizard():
             "claude_api_key": claude_key,
             "azdo_project": ado_project or None,
         }
+        config.update(DEFAULTS)
         save_config(config)
-
-        # Set env vars for this session
-        os.environ["AZDO_PAT"] = azdo_pat
-        os.environ["CLAUDE_API_KEY"] = claude_key
-
         st.session_state.config_complete = True
         st.rerun()
 
     return False
+
+
+def show_settings_ui():
+    """Show normal and advanced settings."""
+    config = load_config()
+
+    with st.expander("⚙️ Settings", expanded=False):
+        # Create tabs for Normal and Advanced
+        tab1, tab2 = st.tabs(["Normal", "Advanced"])
+
+        with tab1:
+            st.markdown("### Essential Settings")
+            with st.form("normal_settings"):
+                org_url = st.text_input(
+                    "Azure DevOps Org URL",
+                    value=config.get("azdo_org_url", ""),
+                    help="Your Azure DevOps organization URL"
+                )
+
+                ado_project = st.text_input(
+                    "Project (optional)",
+                    value=config.get("azdo_project", "") or "",
+                    help="Leave empty to search all projects in your org"
+                )
+
+                azdo_pat = st.text_input(
+                    "ADO Personal Access Token",
+                    value=config.get("azdo_pat", ""),
+                    type="password",
+                    help="Token with Code (Read) scope"
+                )
+
+                claude_key = st.text_input(
+                    "Claude API Key",
+                    value=config.get("claude_api_key", ""),
+                    type="password",
+                    help="API key from console.anthropic.com"
+                )
+
+                open_vscode = st.checkbox(
+                    "Open results in VS Code",
+                    value=config.get("open_in_vscode", True),
+                    help="Automatically open output files in VS Code"
+                )
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.form_submit_button("💾 Save", use_container_width=True):
+                        config.update({
+                            "azdo_org_url": org_url,
+                            "azdo_project": ado_project or None,
+                            "azdo_pat": azdo_pat,
+                            "claude_api_key": claude_key,
+                            "open_in_vscode": open_vscode,
+                        })
+                        save_config(config)
+                        st.success("✅ Settings saved!")
+                        st.rerun()
+
+                with col2:
+                    if st.form_submit_button("🗑️ Clear Secrets", use_container_width=True):
+                        clear_secrets()
+                        st.success("✅ All secrets cleared")
+                        st.session_state.config_complete = False
+                        st.rerun()
+
+        with tab2:
+            st.markdown("### Performance & Behavior")
+            st.caption("⚡ Defaults optimized for speed")
+
+            with st.form("advanced_settings"):
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown("**Verification**")
+
+                    run_tests = st.checkbox(
+                        "Run tests",
+                        value=config.get("run_tests", False),
+                        help="Run test suite after implementation (adds ~30-60 sec). OFF by default for speed."
+                    )
+
+                    run_lint = st.checkbox(
+                        "Run linting",
+                        value=config.get("run_lint", False),
+                        help="Run linters (black, eslint, etc). OFF by default for speed."
+                    )
+
+                    run_build = st.checkbox(
+                        "Run build",
+                        value=config.get("run_build", False),
+                        help="Run build command. OFF by default for speed."
+                    )
+
+                with col2:
+                    st.markdown("**Git & Commits**")
+
+                    auto_commit = st.checkbox(
+                        "Auto-commit changes",
+                        value=config.get("auto_commit", True),
+                        help="Create commits automatically. ON by default (faster than manual)."
+                    )
+
+                    st.markdown("**Search & Context**")
+
+                    skip_ado = st.checkbox(
+                        "Skip Azure DevOps search",
+                        value=config.get("skip_ado", False),
+                        help="Skip ADO lookups (uses brief content only). OFF by default for better context."
+                    )
+
+                    max_prs = st.number_input(
+                        "Max PRs per project",
+                        value=config.get("max_prs", 20),
+                        min_value=5,
+                        max_value=100,
+                        help="Fetch recent PRs for code conventions. Default: 20 (fast & useful)"
+                    )
+
+                    include_style = st.checkbox(
+                        "Include style examples",
+                        value=config.get("include_style_prs", True),
+                        help="Include style PRs in Claude context (helps with naming conventions)"
+                    )
+
+                st.markdown("**Claude Options**")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    claude_model = st.selectbox(
+                        "Claude model",
+                        options=[None, "opus", "sonnet"],
+                        index=0 if not config.get("claude_model") else (1 if config.get("claude_model") == "opus" else 2),
+                        help="Default: Claude's default (fastest). Opus: slower but more capable"
+                    )
+
+                with col2:
+                    timeout = st.number_input(
+                        "Claude timeout (seconds)",
+                        value=config.get("claude_timeout", 600),
+                        min_value=60,
+                        max_value=3600,
+                        help="Max time to wait for Claude response. Default: 600 (10 min)"
+                    )
+
+                if st.form_submit_button("💾 Save Advanced Settings", use_container_width=True):
+                    config.update({
+                        "run_tests": run_tests,
+                        "run_lint": run_lint,
+                        "run_build": run_build,
+                        "auto_commit": auto_commit,
+                        "skip_ado": skip_ado,
+                        "max_prs": int(max_prs),
+                        "include_style_prs": include_style,
+                        "claude_model": claude_model,
+                        "claude_timeout": int(timeout),
+                    })
+                    save_config(config)
+                    st.success("✅ Advanced settings saved!")
+                    st.rerun()
+
+        # Security status
+        st.divider()
+        if KEYRING_AVAILABLE:
+            st.info("🔐 Secrets stored in Windows Credential Manager (encrypted)")
+        else:
+            st.warning("⚠️ keyring module not available — secrets in plain text")
 
 
 def run_stage_with_env(stage_id, stage_name, cmd_args, cwd, env):
@@ -184,93 +286,40 @@ def show_main_app():
     st.title("🧙 case-wizard")
     st.caption("Three-stage case automation: Brief → Guide → Solve")
 
-    # Settings button in top right
-    col1, col2 = st.columns([5, 1])
-    with col2:
-        if st.button("⚙️", use_container_width=True, help="Edit settings"):
-            st.session_state.show_settings = not st.session_state.get("show_settings", False)
+    # Settings button
+    show_settings_ui()
 
-    if st.session_state.get("show_settings"):
-        with st.expander("Settings", expanded=True):
-            config = load_config()
-            with st.form("settings_form"):
-                org_url = st.text_input("ADO Org URL", value=config.get("azdo_org_url", ""))
-                ado_project = st.text_input("ADO Project (optional)", value=config.get("azdo_project", "") or "")
-                azdo_pat = st.text_input("ADO PAT", type="password", value=config.get("azdo_pat", ""))
-                claude_key = st.text_input("Claude API Key", type="password", value=config.get("claude_api_key", ""))
-
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.form_submit_button("💾 Save", use_container_width=True):
-                        config = {
-                            "azdo_org_url": org_url,
-                            "azdo_pat": azdo_pat,
-                            "claude_api_key": claude_key,
-                            "azdo_project": ado_project or None,
-                        }
-                        save_config(config)
-                        os.environ["AZDO_PAT"] = azdo_pat
-                        os.environ["CLAUDE_API_KEY"] = claude_key
-                        st.success("✅ Settings saved!")
-                        st.session_state.show_settings = False
-                        st.rerun()
-
-                with col2:
-                    if st.form_submit_button("🗑️ Clear All Secrets", use_container_width=True):
-                        if KEYRING_AVAILABLE:
-                            keyring.delete_password(SERVICE_NAME, "azdo_pat")
-                            keyring.delete_password(SERVICE_NAME, "claude_api_key")
-                        CONFIG_FILE.unlink(missing_ok=True)
-                        st.success("✅ All secrets cleared from Credential Manager")
-                        st.session_state.config_complete = False
-                        st.rerun()
-
-            st.markdown("**Security:**")
-            if KEYRING_AVAILABLE:
-                st.info("🔐 Secrets stored in Windows Credential Manager (encrypted in OS vault)")
-            else:
-                st.warning("⚠️ keyring module not available — secrets in plain text (not secure)")
-
-        st.divider()
+    st.divider()
 
     # Case number input
-    with st.container():
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            case_number = st.text_input(
-                "Case Number",
-                placeholder="T2611845",
-                label_visibility="collapsed",
-                key="case_input"
-            ).upper().strip()
-        with col2:
-            if st.button("🔄 Clear", use_container_width=True):
-                st.session_state.clear()
-                st.rerun()
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        case_number = st.text_input(
+            "Case Number",
+            placeholder="T2611845",
+            label_visibility="collapsed",
+            key="case_input"
+        ).upper().strip()
+    with col2:
+        if st.button("🔄 Clear", use_container_width=True):
+            st.session_state.clear()
+            st.rerun()
 
     if not case_number:
         st.info("📋 Enter a case number to start")
         st.stop()
 
-    # Initialize session state for this case
+    # Initialize session state
     if st.session_state.get("current_case") != case_number:
         st.session_state.current_case = case_number
         st.session_state.stage_results = {}
 
     st.divider()
 
-    # Get status of existing outputs
-    status = get_stage_status(case_number)
-
-    # Build environment
+    # Get status
     config = load_config()
-    env = os.environ.copy()
-    env["AZDO_PAT"] = config.get("azdo_pat", "")
-    env["CLAUDE_API_KEY"] = config.get("claude_api_key", "")
-    if config.get("azdo_org_url"):
-        env["AZDO_ORG_URL"] = config.get("azdo_org_url")
-    if config.get("azdo_project"):
-        env["AZDO_PROJECT"] = config.get("azdo_project")
+    status = get_stage_status(case_number)
+    env = get_env_dict(config)
 
     # Define stages
     stages = [
@@ -300,12 +349,10 @@ def show_main_app():
         },
     ]
 
-    # Show checklist header
     st.markdown(f"### Pipeline for Case `{case_number}`")
 
-    # Checklist section
+    # Checklist
     with st.container(border=True):
-        # Overall status
         completed = sum(1 for s in status.values() if s)
         total = len(status)
 
@@ -316,78 +363,54 @@ def show_main_app():
             st.metric("", f"{completed}/{total}")
         with col3:
             if completed == total:
-                st.success("✅ All stages complete!")
+                st.success("✅ All complete!")
             elif completed > 0:
-                st.info(f"⏳ {total - completed} stage(s) remaining")
+                st.info(f"⏳ {total - completed} remaining")
             else:
                 st.warning("🚀 Ready to start")
 
         st.divider()
 
-        # Stages checklist with individual controls
+        # Stages
         for i, stage in enumerate(stages, 1):
             stage_id = stage["id"]
             is_done = status[stage_id]
-            is_running = st.session_state.stage_results.get(f"{stage_id}_running", False)
 
-            # Checklist item
             col1, col2, col3 = st.columns([0.5, 3, 2])
 
             with col1:
-                if is_done:
-                    st.markdown("✅")
-                elif is_running:
-                    st.markdown("🔄")
-                else:
-                    st.markdown(f"{i}️⃣")
+                st.markdown("✅" if is_done else f"{i}️⃣")
 
             with col2:
                 st.markdown(f"**{stage['emoji']} {stage['name']}**")
                 st.caption(stage["description"])
 
             with col3:
-                # Run button for individual stage
                 if st.button(
-                    f"▶ Run {stage['name']}",
+                    f"▶ Run",
                     key=f"btn_{stage_id}",
                     use_container_width=True,
-                    type="secondary" if not is_done else "secondary"
+                    type="secondary"
                 ):
-                    st.session_state.stage_results[f"{stage_id}_running"] = True
                     success, output = run_stage_with_env(
-                        stage_id,
-                        stage["name"],
-                        stage["cmd"],
-                        stage["cwd"],
-                        env,
+                        stage_id, stage["name"], stage["cmd"], stage["cwd"], env,
                     )
 
                     if success:
-                        st.session_state.stage_results[stage_id] = "success"
-                        st.session_state.stage_results[f"{stage_id}_running"] = False
                         st.success(f"✅ {stage['name']} complete!")
                         st.rerun()
                     else:
-                        st.session_state.stage_results[stage_id] = "error"
-                        st.session_state.stage_results[f"{stage_id}_running"] = False
                         st.error(f"❌ {stage['name']} failed")
-                        with st.expander("📋 Error details"):
+                        with st.expander("📋 Error"):
                             st.code(output, language="text")
                         st.stop()
-
-            # Show output if it exists and is running/completed
-            if st.session_state.stage_results.get(stage_id) == "success":
-                with st.expander(f"ℹ️ {stage['name']} output"):
-                    st.success("Stage completed successfully")
-                    if st.session_state.stage_results.get(f"{stage_id}_output"):
-                        st.code(st.session_state.stage_results.get(f"{stage_id}_output"), language="text")
 
             if i < len(stages):
                 st.divider()
 
-    # Run all button
+    # Buttons
     st.divider()
-    col1, col2, col3 = st.columns([1, 1, 2])
+    col1, col2 = st.columns(2)
 
     with col1:
         if st.button("▶ Run All Stages", type="primary", use_container_width=True):
@@ -397,7 +420,7 @@ def show_main_app():
         if st.button("⏭️ Skip to Solve", use_container_width=True):
             st.session_state.run_solve_only = True
 
-    # Run all pipeline if requested
+    # Run all
     if st.session_state.get("run_all"):
         st.markdown("### Running Full Pipeline...")
         for stage in stages:
@@ -416,11 +439,7 @@ def show_main_app():
                 progress_ph.progress(0.5)
 
                 success, output = run_stage_with_env(
-                    stage["id"],
-                    stage["name"],
-                    stage["cmd"],
-                    stage["cwd"],
-                    env,
+                    stage["id"], stage["name"], stage["cmd"], stage["cwd"], env,
                 )
 
                 if success:
@@ -433,7 +452,7 @@ def show_main_app():
                     status_ph.markdown("❌ Error")
                     with output_ph.expander("📋 Error"):
                         st.code(output, language="text")
-                    st.error("Pipeline stopped due to error")
+                    st.error("Pipeline stopped")
                     st.session_state.run_all = False
                     st.stop()
 
@@ -441,24 +460,19 @@ def show_main_app():
         st.session_state.run_all = False
         st.rerun()
 
-    # Run solve only if requested
+    # Run solve only
     if st.session_state.get("run_solve_only"):
         solve_stage = stages[2]
-        st.markdown("### Running Solve Stage Only...")
+        st.markdown("### Running Solve Only...")
         with st.container(border=True):
             st.markdown(f"**{solve_stage['emoji']} {solve_stage['name']}**")
-
             status_ph = st.empty()
             progress_ph = st.progress(0.5)
-
             status_ph.markdown("🔄 Running...")
 
             success, output = run_stage_with_env(
-                solve_stage["id"],
-                solve_stage["name"],
-                solve_stage["cmd"],
-                solve_stage["cwd"],
-                env,
+                solve_stage["id"], solve_stage["name"],
+                solve_stage["cmd"], solve_stage["cwd"], env,
             )
 
             if success:
@@ -477,24 +491,16 @@ def show_main_app():
         st.session_state.run_solve_only = False
 
 
-# Main logic
+# Main
+st.set_page_config(page_title="case-wizard", page_icon="🧙", layout="wide")
+
 if st.session_state.get("config_complete") is None:
     config = load_config()
-    if not config.get("azdo_pat") or not config.get("claude_api_key") or not config.get("azdo_org_url"):
-        st.session_state.config_complete = False
-    else:
-        st.session_state.config_complete = True
+    st.session_state.config_complete = bool(
+        config.get("azdo_pat") and config.get("claude_api_key") and config.get("azdo_org_url")
+    )
 
 if not st.session_state.get("config_complete"):
     show_config_wizard()
 else:
-    # Set env vars from config
-    config = load_config()
-    os.environ["AZDO_PAT"] = config.get("azdo_pat", "")
-    os.environ["CLAUDE_API_KEY"] = config.get("claude_api_key", "")
-    if config.get("azdo_org_url"):
-        os.environ["AZDO_ORG_URL"] = config.get("azdo_org_url")
-    if config.get("azdo_project"):
-        os.environ["AZDO_PROJECT"] = config.get("azdo_project")
-
     show_main_app()
