@@ -10,9 +10,236 @@ from settings import (
     load_config, save_config, clear_secrets, get_env_dict,
     KEYRING_AVAILABLE, CONFIG_FILE, DEFAULTS
 )
+from checks import run_health_check, get_startup_issues
 
 HERE = Path(__file__).parent
 PROJECT_ROOT = HERE.parent
+
+
+def show_help_card():
+    """Show help and requirements card."""
+    with st.expander("❓ Help & Requirements", expanded=False):
+        tab1, tab2, tab3 = st.tabs(["Requirements", "Troubleshooting", "FAQ"])
+
+        with tab1:
+            st.markdown("### What You Need")
+            st.markdown("""
+            **Before running case-wizard:**
+
+            ✅ **Claude Code CLI**
+            - Install: https://claude.com/claude-code
+            - Verify: `claude --version`
+            - Login: `claude login`
+
+            ✅ **Azure DevOps**
+            - Create PAT: https://dev.azure.com/{org}/_usersSettings/tokens
+            - Scopes: Code (Read), Project and Team (Read)
+            - Org URL: https://dev.azure.com/yourorg
+
+            ✅ **Dynamics 365 CRM**
+            - Open your CRM in browser
+            - Log in to your account
+            - Keep tab open while running (case-brief scrapes it)
+
+            ✅ **Git**
+            - Install from https://git-scm.com
+            - Configure: `git config --global user.name "Your Name"`
+
+            **Checklist before starting:**
+            - [ ] Python installed (check: `python --version`)
+            - [ ] Git installed (check: `git --version`)
+            - [ ] Claude CLI installed (check: `claude --version`)
+            - [ ] Claude logged in (check: `claude login`)
+            - [ ] CRM browser tab open and logged in
+            - [ ] Azure DevOps PAT created
+            """)
+
+        with tab2:
+            st.markdown("### Troubleshooting")
+            st.markdown("""
+            **"Claude CLI not found"**
+            - Install Claude Code: https://claude.com/claude-code
+            - Restart your terminal after installing
+            - Verify: `claude --version`
+
+            **"Claude not logged in"**
+            - Run: `claude login`
+            - Browser will open, authenticate
+            - Come back to case-wizard
+
+            **"CRM scrape failed"**
+            - Make sure your Dynamics 365 tab is logged in
+            - Try again (case-brief will retry automatically)
+            - Check your ADO PAT has right scopes
+
+            **"Azure DevOps not found"**
+            - Verify PAT token is correct
+            - Check it has Code (Read) scope
+            - Try creating a new PAT
+
+            **"Git clone failed"**
+            - Verify git is installed: `git --version`
+            - Configure git: `git config --global user.name "Your Name"`
+            - Check internet connection
+
+            **"Python version error"**
+            - Need Python 3.8+
+            - Install from https://python.org
+            - Add to PATH during installation
+            """)
+
+        with tab3:
+            st.markdown("### Frequently Asked")
+            st.markdown("""
+            **Q: Do I need a Claude API key?**
+            A: No! Claude Code CLI handles authentication. Just log in with `claude login`.
+
+            **Q: How long does each stage take?**
+            A: Brief: 2-5 min | Guide: 3-10 min | Solve: 5-20 min (depends on repo)
+
+            **Q: Can I run stages separately?**
+            A: Yes! Click individual "▶ Run" buttons or use "▶ Run All Stages".
+
+            **Q: What if a stage fails?**
+            A: Click "▶ Run" again to retry, or check error details in expandable sections.
+
+            **Q: Is my data secure?**
+            A: Yes. API keys stored in Windows Credential Manager (encrypted). Nothing sent to cloud except Claude API calls.
+
+            **Q: Can I run multiple cases?**
+            A: One at a time in the UI. You can queue them in Settings (Advanced).
+            """)
+
+        st.divider()
+        st.info("💡 **Tip:** Keep this help card open while learning case-wizard!")
+
+
+def show_startup_health_check():
+    """Show startup health check and block if critical issues."""
+    config = load_config()
+    health = run_health_check(config)
+    critical, warnings = get_startup_issues(health)
+
+    st.title("🧙 case-wizard Startup Check")
+
+    # Show all checks
+    with st.container(border=True):
+        st.markdown("### System Requirements")
+
+        for check_name, result in health.items():
+            col1, col2, col3 = st.columns([1, 2, 2])
+
+            with col1:
+                if result["status"] is True:
+                    st.markdown("✅")
+                elif result["status"] is False:
+                    st.markdown("❌")
+                else:
+                    st.markdown("⚠️")
+
+            with col2:
+                st.markdown(f"**{check_name}**")
+
+            with col3:
+                st.caption(result["message"])
+
+    st.divider()
+
+    # Show help if issues exist
+    if critical or warnings:
+        if critical:
+            st.error(f"❌ **{len(critical)} critical issue(s) blocking startup:**")
+            for check_name, message in critical:
+                st.markdown(f"- **{check_name}:** {message}")
+
+                # Provide specific help
+                if "Claude" in check_name:
+                    st.info("👉 Install Claude Code: https://claude.com/claude-code")
+                elif "Git" in check_name:
+                    st.info("👉 Install Git: https://git-scm.com")
+                elif "ADO" in check_name or "Azure" in check_name:
+                    st.info("👉 Create PAT: https://dev.azure.com/{org}/_usersSettings/tokens")
+
+            st.markdown("### Fix Issues, Then Refresh")
+            st.markdown("After fixing issues above, press **F5** or click **Rerun** to check again.")
+            st.stop()
+
+        if warnings:
+            st.warning(f"⚠️ **{len(warnings)} warning(s):**")
+            for check_name, message in warnings:
+                st.markdown(f"- **{check_name}:** {message}")
+
+    st.success("✅ All systems ready! Click below to continue.")
+
+    if st.button("▶ Continue to case-wizard", type="primary", use_container_width=True):
+        st.session_state.startup_check_passed = True
+        st.rerun()
+
+
+def show_first_time_setup():
+    """Show first-time setup wizard."""
+    st.title("🧙 case-wizard First-Time Setup")
+
+    st.markdown("""
+    Welcome! Let's get you set up in 3 minutes.
+
+    ### What You'll Need
+    - Azure DevOps organization and personal access token
+    - (Claude Code and CRM are already checked ✅)
+    """)
+
+    with st.form("setup_wizard"):
+        st.markdown("### Step 1: Azure DevOps")
+        st.caption("Get your org URL from https://dev.azure.com")
+
+        org_url = st.text_input(
+            "Organization URL",
+            placeholder="https://dev.azure.com/yourorg",
+            help="Full URL of your Azure DevOps organization"
+        )
+
+        st.markdown("### Step 2: Personal Access Token (PAT)")
+        st.caption("Create at: https://dev.azure.com/{org}/_usersSettings/tokens")
+
+        azdo_pat = st.text_input(
+            "PAT Token",
+            type="password",
+            placeholder="Paste your PAT here",
+            help="Token with Code (Read) and Project and Team (Read) scopes"
+        )
+
+        st.markdown("### Step 3: Optional")
+
+        ado_project = st.text_input(
+            "Azure DevOps Project (optional)",
+            placeholder="MyProject",
+            help="Leave empty to search all projects in your org"
+        )
+
+        st.divider()
+
+        col1, col2 = st.columns(2)
+        with col1:
+            submitted = st.form_submit_button("✅ Complete Setup", type="primary", use_container_width=True)
+        with col2:
+            st.form_submit_button("❌ Cancel", use_container_width=True, disabled=True)
+
+    if submitted:
+        if not org_url or not azdo_pat:
+            st.error("Please fill in Azure DevOps org URL and PAT")
+            return
+
+        config = {
+            "azdo_org_url": org_url,
+            "azdo_pat": azdo_pat,
+            "azdo_project": ado_project or None,
+        }
+        config.update(DEFAULTS)
+        save_config(config)
+
+        st.success("✅ Setup complete! Starting case-wizard...")
+        st.session_state.setup_complete = True
+        st.rerun()
 
 
 def show_config_wizard():
@@ -80,7 +307,6 @@ def show_settings_ui():
     config = load_config()
 
     with st.expander("⚙️ Settings", expanded=False):
-        # Create tabs for Normal and Advanced
         tab1, tab2 = st.tabs(["Normal", "Advanced"])
 
         with tab1:
@@ -226,7 +452,6 @@ def show_settings_ui():
                     st.success("✅ Advanced settings saved!")
                     st.rerun()
 
-        # Security status
         st.divider()
         if KEYRING_AVAILABLE:
             st.info("🔐 Secrets stored in Windows Credential Manager (encrypted)")
@@ -256,6 +481,20 @@ def run_stage_with_env(stage_id, stage_name, cmd_args, cwd, env):
         return False, str(e)
 
 
+def detect_crm_login_issue(output):
+    """Check if output indicates CRM login issue."""
+    error_indicators = [
+        "no crm tab",
+        "not logged in",
+        "authentication",
+        "unauthorized",
+        "dynamics",
+        "crm",
+    ]
+    lower_output = output.lower()
+    return any(indicator in lower_output for indicator in error_indicators)
+
+
 def get_stage_status(case_num):
     """Check if output files exist for each stage."""
     brief_file = PROJECT_ROOT / "case-brief" / "case-briefs" / f"case-{case_num}.md"
@@ -273,6 +512,9 @@ def show_main_app():
     """Show main workflow interface."""
     st.title("🧙 case-wizard")
     st.caption("Three-stage case automation: Brief → Guide → Solve")
+
+    # Help card at top
+    show_help_card()
 
     # Settings button
     show_settings_ui()
@@ -389,7 +631,17 @@ def show_main_app():
                         st.rerun()
                     else:
                         st.error(f"❌ {stage['name']} failed")
-                        with st.expander("📋 Error"):
+
+                        # Check for CRM login issue
+                        if stage_id == "brief" and detect_crm_login_issue(output):
+                            st.warning("""
+                            💡 **Possible CRM Login Issue:**
+                            - Make sure your Dynamics 365 browser tab is logged in
+                            - Check you're in the right CRM instance
+                            - Try again after verifying login
+                            """)
+
+                        with st.expander("📋 Error details"):
                             st.code(output, language="text")
                         st.stop()
 
@@ -482,13 +734,38 @@ def show_main_app():
 # Main
 st.set_page_config(page_title="case-wizard", page_icon="🧙", layout="wide")
 
+# Startup health check (on first load)
+if st.session_state.get("startup_check_done") is None:
+    st.session_state.startup_check_done = False
+
+if not st.session_state.get("startup_check_done"):
+    st.session_state.startup_check_done = True
+    show_startup_health_check()
+
+# Setup check
+if st.session_state.get("setup_complete") is None:
+    st.session_state.setup_complete = False
+
+if not st.session_state.get("setup_complete"):
+    config = load_config()
+    if not config.get("azdo_pat") or not config.get("azdo_org_url"):
+        st.session_state.setup_complete = False
+    else:
+        st.session_state.setup_complete = True
+
+# Config check (old flow, kept for compatibility)
 if st.session_state.get("config_complete") is None:
     config = load_config()
     st.session_state.config_complete = bool(
         config.get("azdo_pat") and config.get("azdo_org_url")
     )
 
-if not st.session_state.get("config_complete"):
-    show_config_wizard()
+# Show appropriate screen
+if not st.session_state.get("setup_complete"):
+    if not st.session_state.get("config_complete"):
+        show_config_wizard()
+    else:
+        st.session_state.setup_complete = True
+        st.rerun()
 else:
     show_main_app()
