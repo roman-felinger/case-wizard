@@ -2,10 +2,12 @@
 __pycache__/
 *.pyc
 .venv/
+.venv/.pip-installed
 *.egg-info/
 
 # Config & secrets
 */config.json
+.streamlit_config.json
 case-brief/.token_cache/
 case-brief/.last_urls.json
 
