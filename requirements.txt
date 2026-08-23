@@ -1,9 +1,10 @@
-# case-wizard: Combined requirements for all three projects
-# Individual projects also have their own requirements.txt
+# case-wizard: All-in-one automation suite
+# Core UI
+streamlit>=1.28.0
 
-# case-brief
+# HTTP and data
+requests>=2.31.0
+
+# Browser automation (case-brief)
 msal>=1.28
 playwright>=1.45
-
-# case-guide & case-solve
-requests>=2.31
