@@ -518,8 +518,8 @@ def show_main_app():
 
     st.divider()
 
-    # Show CRM and ADO status with recheck buttons
-    col1, col2, col3, col4 = st.columns([1, 1, 1, 2])
+    # Show CRM and ADO status with individual recheck buttons
+    col1, col2, col3, col4 = st.columns([1, 1.5, 1, 1.5])
 
     with col1:
         st.markdown("**CRM:**")
@@ -529,23 +529,12 @@ def show_main_app():
             if status is True:
                 st.markdown("✅")
             elif status is False:
-                st.markdown("⏳")
+                st.markdown("❌")
             else:
-                st.markdown("ℹ️")
+                st.markdown("⏳")
 
     with col2:
-        st.markdown("**ADO:**")
-        ado_result = st.session_state.get("ado_check_result")
-        if ado_result:
-            status, msg = ado_result
-            if status is True:
-                st.markdown("✅")
-            else:
-                st.markdown("⚠️")
-
-    with col3:
-        if st.button("↻ Recheck Both", use_container_width=True, key="recheck_btn"):
-            # Recheck CRM login
+        if st.button("↻ Recheck CRM", use_container_width=True, key="recheck_crm_btn"):
             if config.get("crm_url"):
                 try:
                     import requests
@@ -565,8 +554,63 @@ def show_main_app():
                         st.session_state.crm_check_result = (None, f"HTTP {response.status_code}")
                 except Exception as e:
                     st.session_state.crm_check_result = (None, "Check error")
+            st.rerun()
 
-            # Recheck ADO API
+    with col3:
+        st.markdown("**ADO:**")
+        ado_result = st.session_state.get("ado_check_result")
+        if ado_result:
+            status, msg = ado_result
+            if status is True:
+                st.markdown("✅")
+            else:
+                st.markdown("❌")
+
+    with col4:
+        if st.button("↻ Recheck ADO", use_container_width=True, key="recheck_ado_btn"):
+            if config.get("azdo_org_url") and config.get("azdo_pat"):
+                try:
+                    ado_ok, ado_msg = check_azdo_access(config["azdo_org_url"], config["azdo_pat"])
+                    st.session_state.ado_check_result = (ado_ok, ado_msg)
+                except Exception as e:
+                    st.session_state.ado_check_result = (False, f"API error: {str(e)}")
+            st.rerun()
+
+    # Show messages if not all green
+    crm_result = st.session_state.get("crm_check_result")
+    ado_result = st.session_state.get("ado_check_result")
+
+    if crm_result and crm_result[0] is not True:
+        st.warning(f"❌ CRM: {crm_result[1]}")
+
+    if ado_result and ado_result[0] is not True:
+        st.warning(f"❌ ADO: {ado_result[1]}")
+
+    # Recheck All button at bottom
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        if st.button("↻ Recheck All", use_container_width=True, key="recheck_all_btn"):
+            # Recheck CRM
+            if config.get("crm_url"):
+                try:
+                    import requests
+                    response = requests.head(config["crm_url"], timeout=5, allow_redirects=False)
+                    if response.status_code in (302, 301):
+                        location = response.headers.get("Location", "").lower()
+                        if "login" in location or "signin" in location or "auth" in location:
+                            st.session_state.crm_check_result = (False, "Not logged in")
+                        else:
+                            st.session_state.crm_check_result = (True, "CRM accessible")
+                    elif response.status_code == 200:
+                        st.session_state.crm_check_result = (True, "Logged in")
+                    elif response.status_code in (401, 403):
+                        st.session_state.crm_check_result = (False, "Access denied")
+                    else:
+                        st.session_state.crm_check_result = (None, f"HTTP {response.status_code}")
+                except Exception as e:
+                    st.session_state.crm_check_result = (None, "Check error")
+
+            # Recheck ADO
             if config.get("azdo_org_url") and config.get("azdo_pat"):
                 try:
                     ado_ok, ado_msg = check_azdo_access(config["azdo_org_url"], config["azdo_pat"])
@@ -575,19 +619,6 @@ def show_main_app():
                     st.session_state.ado_check_result = (False, f"API error: {str(e)}")
 
             st.rerun()
-
-    with col4:
-        st.write("")  # spacer
-
-    # Show messages if not all green
-    crm_result = st.session_state.get("crm_check_result")
-    ado_result = st.session_state.get("ado_check_result")
-
-    if crm_result and crm_result[0] is not True:
-        st.warning(f"⏳ CRM: {crm_result[1]}")
-
-    if ado_result and ado_result[0] is not True:
-        st.warning(f"⚠️ ADO: {ado_result[1]}")
 
     st.divider()
 
