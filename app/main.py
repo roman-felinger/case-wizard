@@ -766,13 +766,76 @@ def show_config_wizard():
 # Main
 st.set_page_config(page_title="case-wizard", page_icon="🧙", layout="wide")
 
-if st.session_state.get("config_complete") is None:
-    config = load_config()
-    st.session_state.config_complete = bool(
-        config.get("azdo_pat") and config.get("azdo_org_url")
-    )  # Project auto-detected from context
+# Always load config and run health checks
+config = load_config()
+health = run_health_check(config)
+critical, warnings = get_startup_issues(health)
 
-if not st.session_state.get("config_complete"):
+# Check if config is complete
+config_complete = bool(config.get("azdo_pat") and config.get("azdo_org_url"))
+
+# If any critical issues → show health checks and fixes (block)
+if critical:
+    st.title("🧙 case-wizard Setup Verification")
+    st.markdown("### Health Checks")
+
+    with st.container(border=True):
+        for check_name, result in health.items():
+            col1, col2, col3 = st.columns([0.8, 2, 2])
+            with col1:
+                if result["status"] is True:
+                    st.markdown("✅")
+                elif result["status"] is False:
+                    st.markdown("❌")
+                else:
+                    st.markdown("⚠️")
+            with col2:
+                st.markdown(f"**{check_name}**")
+            with col3:
+                st.caption(result["message"])
+
+    st.error("### ❌ Critical Issues Found")
+    st.markdown("**You need to fix these before continuing:**\n")
+    for check_name, message in critical:
+        st.markdown(f"- **{check_name}:** {message}")
+
+    st.divider()
+    st.markdown("### How to Fix")
+
+    if any("Claude" in name for name, _ in critical):
+        st.markdown("""
+        **Install Claude Code:**
+        1. Go to https://claude.com/claude-code
+        2. Download and install for your OS
+        3. Run `claude login` in terminal
+        4. Return here and refresh
+        """)
+
+    if any("Git" in name for name, _ in critical):
+        st.markdown("""
+        **Install Git:**
+        1. Go to https://git-scm.com
+        2. Download and install
+        3. Restart terminal
+        4. Verify: `git --version`
+        """)
+
+    if any("Python" in name for name, _ in critical):
+        st.markdown("""
+        **Install Python 3.8+:**
+        1. Go to https://python.org
+        2. Download and install
+        3. Check "Add Python to PATH"
+        4. Restart terminal
+        5. Verify: `python --version`
+        """)
+
+    st.info("⏳ After fixing, press F5 to refresh and continue.")
+
+# If no critical issues but config incomplete → show setup form
+elif not config_complete:
     show_config_wizard()
+
+# If all checks pass and config complete → show main app
 else:
     show_main_app()
