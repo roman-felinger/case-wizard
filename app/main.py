@@ -702,15 +702,11 @@ def show_config_wizard():
         st.divider()
 
         # Submit buttons
-        col1, col2 = st.columns(2)
-        with col1:
-            submit = st.form_submit_button(
-                "✅ Complete Setup",
-                type="primary",
-                use_container_width=True
-            )
-        with col2:
-            st.button("❌ Exit Setup", disabled=True, use_container_width=True)
+        submit = st.form_submit_button(
+            "✅ Complete Setup",
+            type="primary",
+            use_container_width=True
+        )
 
         # Process form submission
         if submit:
