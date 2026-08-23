@@ -20,6 +20,7 @@ DEFAULTS = {
 
     # Normal settings
     "azdo_org_url": None,
+    "crm_url": "https://artex-crm.crm4.dynamics.com/",
     "open_in_vscode": True,
 
     # Advanced settings (defaults optimized for speed)

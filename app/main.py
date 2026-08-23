@@ -627,20 +627,27 @@ def show_config_wizard():
     st.markdown("#### 🌐 Dynamics 365 CRM")
     st.caption("Keep a browser tab open with Dynamics 365 CRM (logged in)")
 
-    col1, col2, col3 = st.columns(3)
+    # Input for CRM URL
+    crm_url = st.text_input(
+        "Your CRM URL",
+        value="https://artex-crm.crm4.dynamics.com/",
+        placeholder="https://yourorg-crm.crm.dynamics.com/",
+        key="crm_url_input",
+        help="Your organization's Dynamics 365 CRM URL (e.g., https://artex-crm.crm4.dynamics.com/)"
+    )
+
+    col1, col2 = st.columns([2, 1])
     with col1:
         if st.button("🔗 Open CRM", use_container_width=True, key="open_crm_btn"):
             import webbrowser
-            webbrowser.open("https://apps.dynamics.com")
-            st.success("✓ Opening Dynamics 365 in your browser... Log in and keep the tab open")
+            webbrowser.open(crm_url)
+            st.success(f"✓ Opening CRM at {crm_url}")
     with col2:
-        st.caption(" ")
-    with col3:
         crm_ready_check = st.checkbox(
-            "✅ Logged in to CRM",
+            "✅ Logged in",
             value=False,
             key="crm_checkbox",
-            help="Check this after opening CRM and signing in"
+            help="Check after logging in to CRM"
         )
 
     st.divider()
@@ -723,6 +730,7 @@ def show_config_wizard():
                 new_config = dict(DEFAULTS)
                 new_config["azdo_org_url"] = org_url
                 new_config["azdo_pat"] = azdo_pat
+                new_config["crm_url"] = crm_url
                 save_config(new_config)
 
                 st.success("✅ Setup complete! Restarting app...")
