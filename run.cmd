@@ -92,7 +92,7 @@ if not exist ".venv\.playwright-installed" (
 REM Launch app
 echo [6/6] Starting case-wizard...
 echo.
-python -m streamlit run app/main.py
+python app/launch.py
 if errorlevel 1 (
     echo.
     echo ERROR: Streamlit failed to start

@@ -45,7 +45,7 @@ try {
     }
 
     Write-Host "Starting case-wizard..." -ForegroundColor Yellow
-    python -m streamlit run app/main.py
+    python app/launch.py
 }
 catch {
     Write-Host "ERROR: $_" -ForegroundColor Red

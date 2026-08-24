@@ -3,7 +3,7 @@
 case-solve: Read a case guide, implement the changes automatically.
 
 Workflow: case-brief → case-guide → case-solve
-  1. case-brief gathers case context (CRM, ADO, BC) into a markdown brief
+  1. case-brief gathers case context (CRM, ADO) into a markdown brief
   2. case-guide reads the brief, asks Claude for a walkthrough
   3. case-solve reads the guide, clones the repo, implements changes on a branch
 

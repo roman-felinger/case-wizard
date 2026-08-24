@@ -39,7 +39,7 @@ run-tests/lint/build defaults later in the **Settings** tab.
 ## The Three Stages
 
 ### 1. case-brief
-Gathers case context from CRM + Azure DevOps (+ optional Business Central).
+Gathers case context from CRM + Azure DevOps.
 Output: `case-brief/case-briefs/case-<number>.md`
 
 ### 2. case-guide
@@ -81,8 +81,7 @@ explicitly rather than relying on a stage's local config file.
 
 ## Status
 
-- **Brief:** CRM + ADO working; Business Central scraping still has selector gaps
-  (off by default, `--with-bc` to try it)
+- **Brief:** CRM + ADO working
 - **Guide:** stable, has a 63-test suite (`case-guide/tests/`)
 - **Solve:** MVP — clone/branch/dependency-install verified; a real end-to-end Claude
   implementation run against a live repo is the main thing left to exercise

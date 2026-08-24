@@ -38,4 +38,4 @@ else
 fi
 
 echo "Starting case-wizard..."
-python -m streamlit run app/main.py
+python app/launch.py

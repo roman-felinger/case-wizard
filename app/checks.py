@@ -95,23 +95,35 @@ def check_config(config):
     return None, "Azure DevOps: Configure in next step"
 
 
-def run_health_check(config):
-    """Run all health checks and return results."""
+def run_health_check(config, on_check=None):
+    """Run all health checks and return results.
+
+    on_check(name, result_dict), if given, is called right after each
+    individual check finishes - lets a caller show live progress instead
+    of a blank screen for however long the slowest check takes.
+    """
+    # Each check is a callable, not a precomputed value, so they run one at
+    # a time in order - that's what lets on_check report progress as each
+    # one finishes instead of the caller blocking on all six with no idea
+    # which one (e.g. the CRM check, a real browser launch) is running.
     checks = [
-        ("Python 3.8+", check_python()),
-        ("Git", check_git()),
-        ("Claude CLI", check_claude()),
-        ("Claude Logged In", check_claude_login()),
-        ("CRM Browser Tab", check_crm_tab(config.get("crm_url"))),
-        ("Azure DevOps Config", check_config(config)),
+        ("Python 3.8+", check_python),
+        ("Git", check_git),
+        ("Claude CLI", check_claude),
+        ("Claude Logged In", check_claude_login),
+        ("CRM Browser Tab", lambda: check_crm_tab(config.get("crm_url"))),
+        ("Azure DevOps Config", lambda: check_config(config)),
     ]
 
     results = {}
-    for name, (status, message) in checks:
+    for name, check_fn in checks:
+        status, message = check_fn()
         results[name] = {
             "status": status,  # True, False, or None (warning)
             "message": message,
         }
+        if on_check:
+            on_check(name, results[name])
 
     return results
 

@@ -3,24 +3,29 @@
 Scope: `_page_state`'s DOM classification is exercised entirely against a
 mocked Playwright `page` object (`page.url`, `page.locator(sel).count()`)
 -- no real browser, no real Chromium process, no real network anywhere in
-this file. `reset_profile()`'s Windows-only early-return guard is tested by
-patching `sys.platform`; everything past that guard (subprocess/taskkill/
-file deletion) is mocked so nothing real ever runs, including on an actual
-Windows test machine.
+this file. `_chrome_cfg` is tested against a tempfile-based fake
+case-brief/config.json, never the real one. `reset_profile()` just
+delegates to case-brief's own lib.browser.close_chrome_window (already
+covered by case-brief's own test suite) - here it's checked only for
+delegating with the right config, fully mocked.
 
-Deliberately skipped: check_login_headless and open_login_window both
-launch a real (or headless) Playwright browser via
-`sync_playwright().chromium.launch_persistent_context(...)` -- mocking that
-context-manager chain deeply enough to be meaningful would mostly be
+Deliberately skipped: check_login_headless and ensure_crm_tab_open both
+attach to a real (or freshly-launched) Chrome over the CDP protocol via
+case-brief's lib.browser.ensure_chrome + Playwright's connect_over_cdp --
+mocking that chain deeply enough to be meaningful would mostly be
 re-asserting "the mock returns what we told it to", so those two functions
-are left uncovered here in favor of `_page_state`, which holds all of their
-actual decision logic.
+are left uncovered here in favor of `_page_state`, which holds all of
+their actual decision logic, and `_find_or_open_tab`, which holds the
+find-existing-tab-vs-open-new-one logic they both depend on.
 
 Run with: python -m unittest discover -s tests -v   (from app/)
 """
+import json
 import os
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -119,43 +124,92 @@ class PageStateTests(unittest.TestCase):
         self.assertEqual(crmp._page_state(page), "app")
 
 
+class ChromeCfgTests(unittest.TestCase):
+    """_chrome_cfg reads case-brief's own config.json chrome.* section and
+    resolves profile_dir to an absolute path relative to case-brief/, not
+    this process's cwd - that's the whole point of sharing the profile."""
+
+    def test_falls_back_to_documented_defaults_when_config_missing(self):
+        with mock.patch.object(Path, "exists", return_value=False):
+            cfg = crmp._chrome_cfg()
+        self.assertEqual(cfg["debug_port"], 9222)
+        self.assertTrue(cfg["profile_dir"].endswith("chrome-automation-profile"))
+        self.assertTrue(os.path.isabs(cfg["profile_dir"]))
+
+    def test_reads_overrides_from_a_real_config_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            config_path.write_text(json.dumps({"chrome": {"debug_port": 9333, "profile_dir": "./custom-profile"}}))
+            with mock.patch.object(crmp, "CASE_BRIEF_DIR", Path(tmp)):
+                cfg = crmp._chrome_cfg()
+            self.assertEqual(cfg["debug_port"], 9333)
+            self.assertEqual(cfg["profile_dir"], str((Path(tmp) / "custom-profile").resolve()))
+
+    def test_an_already_absolute_profile_dir_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            abs_profile = str(Path(tmp) / "somewhere-else")
+            config_path = Path(tmp) / "config.json"
+            config_path.write_text(json.dumps({"chrome": {"profile_dir": abs_profile}}))
+            with mock.patch.object(crmp, "CASE_BRIEF_DIR", Path(tmp)):
+                cfg = crmp._chrome_cfg()
+            self.assertEqual(cfg["profile_dir"], abs_profile)
+
+    def test_a_malformed_config_file_falls_back_to_defaults_rather_than_raising(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "config.json").write_text("{not valid json")
+            with mock.patch.object(crmp, "CASE_BRIEF_DIR", Path(tmp)):
+                cfg = crmp._chrome_cfg()  # must not raise
+            self.assertEqual(cfg["debug_port"], 9222)
+
+
+class FindOrOpenTabTests(unittest.TestCase):
+    """The find-existing-tab-vs-open-new-one logic both check_login_headless
+    and ensure_crm_tab_open depend on - never opens a second Chrome window,
+    only ever a new tab in the one already-attached browser/context."""
+
+    def _browser_with_pages(self, pages):
+        ctx = mock.Mock(pages=pages)
+        return mock.Mock(contexts=[ctx]), ctx
+
+    def test_reuses_an_existing_tab_for_the_same_host(self):
+        existing = mock.Mock(url="https://artex-crm.crm4.dynamics.com/main.aspx")
+        browser_handle, ctx = self._browser_with_pages([existing])
+        result = crmp._find_or_open_tab(browser_handle, "https://artex-crm.crm4.dynamics.com/", 15000)
+        self.assertIs(result, existing)
+        ctx.new_page.assert_not_called()
+
+    def test_opens_a_new_tab_when_no_matching_host_is_open(self):
+        other = mock.Mock(url="https://example.com/")
+        browser_handle, ctx = self._browser_with_pages([other])
+        new_page = mock.Mock()
+        ctx.new_page.return_value = new_page
+        result = crmp._find_or_open_tab(browser_handle, "https://artex-crm.crm4.dynamics.com/", 15000)
+        self.assertIs(result, new_page)
+        new_page.goto.assert_called_once()
+        self.assertEqual(new_page.goto.call_args[0][0], "https://artex-crm.crm4.dynamics.com/")
+
+    def test_creates_a_context_when_the_browser_has_none_yet(self):
+        browser_handle = mock.Mock(contexts=[])
+        new_ctx = mock.Mock(pages=[])
+        browser_handle.new_context.return_value = new_ctx
+        new_page = mock.Mock()
+        new_ctx.new_page.return_value = new_page
+        result = crmp._find_or_open_tab(browser_handle, "https://artex-crm.crm4.dynamics.com/", 15000)
+        self.assertIs(result, new_page)
+
+
 class ResetProfileTests(unittest.TestCase):
-    def test_early_return_on_non_windows_platforms_does_nothing(self):
-        with mock.patch.object(crmp.sys, "platform", "linux"), \
-             mock.patch.object(crmp.subprocess, "run") as run, \
-             mock.patch.object(crmp.Path, "unlink") as unlink:
+    """reset_profile is a thin delegation to case-brief's own
+    lib.browser.close_chrome_window (already exercised by case-brief's own
+    test suite against the real kill/lockfile-cleanup logic) - here just
+    checking it's called with this shared config, fully mocked."""
+
+    def test_delegates_to_case_brief_close_chrome_window_with_shared_config(self):
+        fake_cfg = {"debug_port": 9222, "profile_dir": "/some/shared/profile"}
+        with mock.patch.object(crmp, "_chrome_cfg", return_value=fake_cfg), \
+             mock.patch.object(crmp.cb_browser, "close_chrome_window") as close_fn:
             crmp.reset_profile()
-        run.assert_not_called()
-        unlink.assert_not_called()
-
-    def test_on_windows_it_queries_and_kills_matching_processes(self):
-        ps_result = mock.Mock(stdout="1234\n5678\n")
-        taskkill_result = mock.Mock()
-        with mock.patch.object(crmp.sys, "platform", "win32"), \
-             mock.patch.object(crmp.subprocess, "run", side_effect=[ps_result, taskkill_result, taskkill_result]) as run, \
-             mock.patch.object(crmp.Path, "unlink") as unlink:
-            crmp.reset_profile()
-        self.assertEqual(run.call_count, 3)  # 1 powershell query + 2 taskkills
-        first_call_args = run.call_args_list[0][0][0]
-        self.assertIn("powershell", first_call_args)
-        second_call_args = run.call_args_list[1][0][0]
-        self.assertEqual(second_call_args, ["taskkill", "/F", "/PID", "1234"])
-        # Lock files are still cleaned up regardless.
-        self.assertEqual(unlink.call_count, 2)
-
-    def test_on_windows_a_powershell_failure_is_swallowed_and_lockfiles_still_get_removed(self):
-        with mock.patch.object(crmp.sys, "platform", "win32"), \
-             mock.patch.object(crmp.subprocess, "run", side_effect=Exception("powershell not found")), \
-             mock.patch.object(crmp.Path, "unlink") as unlink:
-            crmp.reset_profile()  # must not raise
-        self.assertEqual(unlink.call_count, 2)
-
-    def test_on_windows_a_lockfile_unlink_failure_is_swallowed(self):
-        ps_result = mock.Mock(stdout="")
-        with mock.patch.object(crmp.sys, "platform", "win32"), \
-             mock.patch.object(crmp.subprocess, "run", return_value=ps_result), \
-             mock.patch.object(crmp.Path, "unlink", side_effect=OSError("in use")):
-            crmp.reset_profile()  # must not raise
+        close_fn.assert_called_once_with(fake_cfg)
 
 
 if __name__ == "__main__":

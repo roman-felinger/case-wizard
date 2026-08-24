@@ -10,6 +10,7 @@ __pycache__/
 .streamlit_config.json
 case-brief/.token_cache/
 case-brief/.last_urls.json
+case-brief/chrome-automation-profile/
 app/.crm_profile/
 
 # Generated output
