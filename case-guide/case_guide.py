@@ -45,6 +45,7 @@ import copy
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -60,7 +61,7 @@ if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from lib import ado_api, writer
+from lib import ado_api, repo_suggest, writer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
@@ -76,6 +77,10 @@ DEFAULTS = {
         "max_prs": ado_api.DEFAULT_MAX_PRS,
         "style_pr_sample": 5,
     },
+    # Repo suggestion for the guide's "Get set up" step -- see
+    # lib/repo_suggest.py. Moved here from case-brief (see case-brief's
+    # CLAUDE.md), which used to guess this itself.
+    "customer_repo_map": [],
     "claude": {
         "model": None,
         "extra_args": [],
@@ -182,6 +187,27 @@ def format_example_guide(example_text):
     if not example_text:
         return "_No previous guide exists yet -- this is the first one, so there's no house-style example to match._"
     return example_text
+
+
+# case-brief's lib/report.py always renders a case's title as the first "### "
+# heading and its customer as a "- **Customer:** ..." bullet right after it --
+# a fixed enough shape (see case-brief/CLAUDE.md) to pull both back out of the
+# finished brief without needing case-brief's own code (this project stays
+# independent of it, filesystem contract only -- see this file's docstring).
+_CASE_TITLE_RE = re.compile(r"^###\s+(.+?)\s*$", re.MULTILINE)
+_CUSTOMER_RE = re.compile(r"^-\s+\*\*Customer:\*\*\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _extract_case_title(brief_text):
+    m = _CASE_TITLE_RE.search(brief_text)
+    return m.group(1) if m else None
+
+
+def _extract_customer(brief_text):
+    m = _CUSTOMER_RE.search(brief_text)
+    if not m or m.group(1) == "—":  # report.py's placeholder for a missing value
+        return None
+    return m.group(1)
 
 
 def _enrich_branch(azure_cfg, session, b):
@@ -309,6 +335,25 @@ def format_style_prs(prs, reason):
     return "\n".join(lines)
 
 
+def gather_suggested_repo(cfg, repo_override, customer, detail, skip_ado):
+    """Which repo(s)/branch to suggest for the guide's "Get set up" step --
+    see lib/repo_suggest.py. Skipped entirely (not just degraded) when
+    --skip-ado is set, same as gather_style_prs: this needs the same Azure
+    DevOps access gather_ado_detail already declined to use, so there'd be
+    nothing left for it to confirm/guess against beyond a
+    customer_repo_map/--repo hit, and staying consistent with "no live Azure
+    DevOps calls this run" is less surprising than a partial exception to
+    it. Returns a {(project, repo): {clone_url, source}} dict -- possibly
+    empty -- see repo_suggest.merge_confirmed_and_guessed."""
+    if skip_ado:
+        return {}
+    azure_cfg = cfg["azure_devops"]
+    guessed = repo_suggest.resolve_suggested_repos(
+        ado_api, azure_cfg, cfg.get("customer_repo_map", []), repo_override, customer,
+    )
+    return repo_suggest.merge_confirmed_and_guessed(detail, guessed)
+
+
 def format_ado_detail(detail, ado_error):
     if ado_error:
         return f"_Could not fetch live Azure DevOps detail: {ado_error}. Falling back to whatever the brief above already shows._"
@@ -366,9 +411,9 @@ def _truncate(text, limit, label="live Azure DevOps detail", config_key="claude.
 PROMPT_TEMPLATE = """You are helping a support engineer who has just picked up a case and needs a \
 plain-language plan to actually go solve it -- assume they may not have touched this codebase before.
 
-Below is the full case brief (CRM details, linked Azure DevOps branches/PRs, Business Central \
-context if any), plus live Azure DevOps detail on those branches/PRs (their commit messages, \
-changed files, and review comments) that goes beyond what the brief itself shows.
+Below is the full case brief (CRM details, linked Azure DevOps branches/PRs), plus live \
+Azure DevOps detail on those branches/PRs (their commit messages, changed files, and review \
+comments) that goes beyond what the brief itself shows.
 
 Write a Markdown guide titled "# Case {case_number} for Dummies" a newcomer could follow start \
 to finish. Cover, in this order:
@@ -376,8 +421,8 @@ to finish. Cover, in this order:
 1. **What this case is about** -- a plain-language summary of the customer's problem, pulled \
    from the case description below.
 2. **Get set up** -- the exact `git clone` / `cd` / `git checkout -b` commands to run (use the \
-   ones already suggested in the brief's Useful Commands section if present; otherwise say \
-   plainly that no repo has been identified yet and what to do about it).
+   suggested repo/branch below if present; otherwise say plainly that no repo has been \
+   identified yet and what to do about it).
 3. **What's already been tried** -- if there are related branches/PRs below, summarize concretely \
    what they changed (from their commit messages / changed files / review comments) and whether \
    they look finished, still in review, or abandoned. If there's nothing related, say so plainly.
@@ -395,6 +440,9 @@ detail that isn't there. Output only the Markdown guide itself, nothing else -- 
 --- CASE BRIEF ---
 {brief}
 
+--- SUGGESTED REPO/BRANCH ---
+{suggested_repo}
+
 --- LIVE AZURE DEVOPS DETAIL ---
 {ado_detail}
 
@@ -406,10 +454,11 @@ detail that isn't there. Output only the Markdown guide itself, nothing else -- 
 """
 
 
-def build_prompt(case_number, brief_text, ado_detail_text, example_guide_text, style_prs_text):
+def build_prompt(case_number, brief_text, suggested_repo_text, ado_detail_text, example_guide_text, style_prs_text):
     return PROMPT_TEMPLATE.format(
         case_number=case_number,
         brief=brief_text.strip(),
+        suggested_repo=suggested_repo_text,
         ado_detail=ado_detail_text,
         example_guide=example_guide_text,
         style_prs=style_prs_text,
@@ -496,6 +545,7 @@ def build_parser():
     parser.add_argument("--skip-ado", action="store_true", help="Don't re-query Azure DevOps for extra branch/PR detail -- use only what's already in the brief")
     parser.add_argument("--org-url", metavar="URL", help="Azure DevOps org URL override, e.g. https://dev.azure.com/myorg")
     parser.add_argument("--project", metavar="NAME", help="Restrict the Azure DevOps search to one project (default: config.json's azure_devops.project, or search every project in the org)")
+    parser.add_argument("--repo", metavar="PROJECT/REPO", help="Repo to suggest clone/branch commands for, e.g. MyProject/my-repo (overrides customer_repo_map; suggested even with no matching branches/PRs)")
     parser.add_argument("--model", metavar="NAME", help="Model for the headless claude call, e.g. opus/sonnet (default: config.json's claude.model, or claude's own default)")
     parser.add_argument("--claude-arg", metavar="ARG", action="append", dest="claude_args",
                          help="Extra raw argument to pass through to the claude CLI, repeatable "
@@ -568,8 +618,14 @@ def main():
         style_prs, reason = gather_style_prs(cfg, detail)
         style_prs_text = format_style_prs(style_prs, reason)
 
+    print("Working out which repo/branch to suggest...")
+    customer = _extract_customer(brief_text)
+    branch = repo_suggest.branch_name(args.case_number, _extract_case_title(brief_text))
+    suggested_repos = gather_suggested_repo(cfg, args.repo, customer, detail, args.skip_ado)
+    suggested_repo_text = repo_suggest.format_suggested_repo(suggested_repos, branch)
+
     agent_name = None if args.no_agent else cfg["claude"]["agent"]
-    prompt = build_prompt(args.case_number, brief_text, ado_detail_text, example_text, style_prs_text)
+    prompt = build_prompt(args.case_number, brief_text, suggested_repo_text, ado_detail_text, example_text, style_prs_text)
 
     if args.show_prompt:
         print(f"[agent: {agent_name or '(none -- plain default persona)'}]\n")

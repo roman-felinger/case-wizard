@@ -12,6 +12,7 @@ python case_guide.py T2611845 --show-prompt   # assemble the prompt and print it
 python case_guide.py T2611845 --skip-ado      # brief content only, skip the live ADO re-query
 python case_guide.py T2611845                 # full run: needs a brief already written by case-brief, and the claude CLI on PATH
 python case_guide.py T2611845 --force         # regenerate even if the guide is already newer than the brief
+python case_guide.py T2611845 --repo MyProject/my-repo   # override the suggested repo (see "Repo suggestion" below)
 python case_guide.py -h                       # full flag list
 ```
 
@@ -20,17 +21,20 @@ case-brief's `case_brief.py <code>` first) and the `claude` CLI installed + logg
 for any run that doesn't use `--show-prompt`.
 
 ```
-python -m unittest discover -s tests -v   # from case-guide/ -- 63 tests, mocked, no network
+python -m unittest discover -s tests -v   # from case-guide/ -- 94 tests, mocked, no network
 python -m pytest tests                    # equivalent, if pytest is installed
 ```
 
 Deliberately not exhaustive — covers what's worth locking in with a test rather than
 eyeballing: the case-number sanitizer, the brief-lookup traversal guard and
-ambiguous-match safety, the config-comment stripper, and `lib/ado_api.py`'s
-raise-vs-swallow auth-error policy and silent-truncation warnings (mocked). Low-risk
-rendering/formatting branches are skipped in favor of `--show-prompt` (eyeball the
-real output) rather than testing every branch. What no test here can cover (see
-TODO.md): a real `claude` call and a live Azure DevOps org.
+ambiguous-match safety, the config-comment stripper, `lib/ado_api.py`'s
+raise-vs-swallow auth-error policy and silent-truncation warnings (mocked), and
+`lib/repo_suggest.py`'s fuzzy-match ambiguity guard and confirmed-beats-guessed merge
+(`tests/test_repo_suggest.py`, plus `_extract_customer`/`_extract_case_title`'s
+brief-parsing in `tests/test_case_guide.py`). Low-risk rendering/formatting branches
+are skipped in favor of `--show-prompt` (eyeball the real output) rather than testing
+every branch. What no test here can cover (see TODO.md): a real `claude` call and a
+live Azure DevOps org.
 
 ## Architecture
 
@@ -39,10 +43,37 @@ reads the Markdown file `case_brief.py` already wrote. `lib/ado_api.py` here is 
 deliberate standalone copy of case-brief's own module, not an import — see TODO.md's
 "Consider whether ... duplication is worth it" entry before changing that; a fix to
 case-brief's `find_related`/pagination/error-handling does not automatically reach
-this copy and vice versa.
+this copy and vice versa. `lib/repo_suggest.py` is the same story, one level newer:
+case-brief used to own repo-suggestion (guess/render a clone-able repo + branch name)
+and render it as its own "Useful Commands" brief section; that moved here (see
+case-brief/CLAUDE.md) since this project is the one that actually needs it for the
+guide's "Get set up" step, and case-brief's brief is meant to be just the facts.
+
+**Repo suggestion (`lib/repo_suggest.py::resolve_suggested_repos`)** decides which
+repo(s)/branch to suggest, even when Azure DevOps found zero matching branches/PRs
+yet (the common case for a brand-new case). Priority order: `--repo` flag →
+`customer_repo_map` entry in config.json → fuzzy-match the case's customer name
+against ADO project names, then repo names, via `difflib.SequenceMatcher`
+(`best_fuzzy_match` requires the top match to both clear a threshold *and* beat the
+runner-up by a margin — an ambiguous guess is treated as no guess, since it would
+suggest the wrong repo silently). Since this project only has the finished brief
+Markdown to work with (no CRM data of its own), `case_guide.py::_extract_customer` /
+`_extract_case_title` pull the customer name and case title back out of it by regex,
+relying on case-brief's `lib/report.py` always rendering them in the same fixed spot
+(first `### ` heading, and the `- **Customer:** ...` bullet right after it) — a
+missing customer renders as report.py's `—` placeholder, which `_extract_customer`
+treats as "no customer" rather than a literal name to fuzzy-match against.
+`gather_suggested_repo` merges this guess with any confirmed match from this run's
+own live Azure DevOps search (`lib/repo_suggest.py::merge_confirmed_and_guessed`,
+same "confirmed beats guessed" priority case-brief's report.py used to apply) and is
+skipped outright under `--skip-ado`, same as `gather_style_prs`, rather than partially
+using Azure DevOps when the rest of the run explicitly opted out of it.
+`lib/repo_suggest.py::format_suggested_repo` renders the result as its own prompt
+section (`--- SUGGESTED REPO/BRANCH ---`) rather than a finished "Get set up" heading
+— `claude` still writes that section's actual prose from it.
 
 `.claude/agents/case-guide-writer.md` is the persona the headless `claude` call runs
-as (step 6 below) — a normal, project-scoped Claude Code agent file, editable
+as (step 7 below) — a normal, project-scoped Claude Code agent file, editable
 independently of `case_guide.py`; its Markdown body is the actual system prompt.
 
 **Pipeline (`main` in `case_guide.py`):**
@@ -79,8 +110,12 @@ independently of `case_guide.py`; its Markdown body is the actual system prompt.
    ground branch/reviewer/naming advice in this team's actual conventions instead of
    generic guesses (`--no-style-prs` / `azure_devops.style_pr_sample=0` disables;
    implied by `--skip-ado`, which never opens an ADO session at all).
-6. `build_prompt` fills `PROMPT_TEMPLATE` (brief + live ADO detail + house-style
-   example + style-reference PRs, one fixed 5-section guide structure) and
+6. `gather_suggested_repo` (see "Repo suggestion" above) resolves the repo/branch to
+   suggest for step 2 of the guide ("Get set up"), and
+   `repo_suggest.format_suggested_repo` renders it into its own prompt section.
+7. `build_prompt` fills `PROMPT_TEMPLATE` (brief + suggested repo/branch + live ADO
+   detail + house-style example + style-reference PRs, one fixed 5-section guide
+   structure) and
    `call_claude` shells out to `claude -p` non-interactively, piping the prompt on
    stdin. Resolved via `shutil.which` (not `shell=True`) so `--claude-arg` values
    can't be re-parsed/expanded by cmd.exe. The call runs as the `case-guide-writer`
@@ -93,7 +128,7 @@ independently of `case_guide.py`; its Markdown body is the actual system prompt.
    pure text generation with everything already inlined — a
    `subprocess.run(..., timeout=...)` is still there as a safety net in case an
    unexpected permission prompt ever hangs it.
-7. `_looks_like_guide` is a loose sanity check (leading `#`, "for dummies" in the
+8. `_looks_like_guide` is a loose sanity check (leading `#`, "for dummies" in the
    first 200 chars) on `claude`'s output — used only to print a warning, never to
    block writing the file; a human judges the actual content.
 
@@ -103,7 +138,10 @@ call — `--force` bypasses this.
 
 **Config merge order** mirrors case-brief: `DEFAULTS` → `config.json` (deep-merged,
 then `_strip_comments` drops any leading-underscore documentation keys like
-`_comment` so they don't leak into dicts handed to `ado_api.*`) → CLI flags.
+`_comment` so they don't leak into dicts handed to `ado_api.*`) → CLI flags. This is
+also where `customer_repo_map` lives (empty list by default) — `--repo` on the CLI
+side is the one flag `resolve_suggested_repos` reads directly rather than through
+`cfg`, same as case-brief's former version of this did.
 `_resolve_extra_args` is the one exception to "flags always win": `--no-claude-extra-args`
 must be able to say "run with zero extra args," which a plain `action="append"` flag
 can never express since it can only add, not replace-with-nothing.

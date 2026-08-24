@@ -279,5 +279,40 @@ class ResolveExtraArgsTests(unittest.TestCase):
         self.assertEqual(cg._resolve_extra_args(args, cfg), ["--explicit"])
 
 
+class ExtractFromBriefTests(unittest.TestCase):
+    """case-brief's lib/report.py always renders a case's title as the first
+    "### " heading and its customer right after it as a "- **Customer:**
+    ..." bullet -- see this project's CLAUDE.md ("no shared imports... a
+    filesystem contract only") for why this project parses that back out of
+    the finished brief instead of importing case-brief's own code."""
+
+    BRIEF = (
+        "# Case T1\n\n"
+        "### Posting error in Sales Invoice\n"
+        "- **Ticket #:** T1\n"
+        "- **Customer:** Contoso s.r.o.\n"
+        "- **Owner:** Jane\n"
+    )
+
+    def test_extracts_the_case_title(self):
+        self.assertEqual(cg._extract_case_title(self.BRIEF), "Posting error in Sales Invoice")
+
+    def test_extracts_the_customer(self):
+        self.assertEqual(cg._extract_customer(self.BRIEF), "Contoso s.r.o.")
+
+    def test_missing_title_returns_none(self):
+        self.assertIsNone(cg._extract_case_title("# Case T1\n\nno heading here"))
+
+    def test_missing_customer_returns_none(self):
+        self.assertIsNone(cg._extract_customer("### Title\n- **Ticket #:** T1\n"))
+
+    def test_em_dash_placeholder_customer_is_treated_as_missing(self):
+        # report.py renders a missing customer as "- **Customer:** —", not
+        # an empty string -- that placeholder must not be treated as a real
+        # customer name to fuzzy-match against.
+        brief = "### Title\n- **Customer:** —\n"
+        self.assertIsNone(cg._extract_customer(brief))
+
+
 if __name__ == "__main__":
     unittest.main()

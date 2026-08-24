@@ -31,3 +31,14 @@ top of that pipeline -- see README's Status section. What's left:
   is now meaningfully ahead -- session reuse, concurrency, AdoAuthError,
   the generalized `warnings` list, `get_recent_prs`). Not changing this
   without an explicit decision to share code between the two projects.
+- **Verify the customer↔project auto-match against real ADO project names.**
+  `lib/repo_suggest.py`'s fuzzy-matching (`_fuzzy_score`/`best_fuzzy_match`,
+  moved here from case-brief) is unit-tested with made-up names but not yet
+  checked against how your org's actual projects are named vs. how CRM
+  customer names actually look -- the threshold/lead values may need tuning
+  once you see real guesses.
+- **Actually run the clone + branch-create, not just suggest the commands.**
+  `lib/repo_suggest.py` resolves a repo/branch and feeds it to the guide's
+  "Get set up" step, but a real next step would be to run it automatically --
+  offer to pick a repo, clone/pull it locally, and create the branch -- so
+  starting work on a case skips the copy-paste entirely.

@@ -119,6 +119,17 @@ def list_repos(cfg, project, session=None):
     return data.get("value", [])
 
 
+def get_repo(cfg, project, repo_name, session=None):
+    """A single named repo's info (including its clone URL), or None if it
+    doesn't exist / isn't visible with this PAT -- used by
+    lib/repo_suggest.py to resolve a clone URL for a customer-name guess or
+    a customer_repo_map/--repo override, same as case-brief's own get_repo."""
+    for repo in list_repos(cfg, project, session=session):
+        if repo["name"].lower() == repo_name.lower():
+            return repo
+    return None
+
+
 def _branches_in_repo(org_url, project, repo, needle, session):
     """Branches in one repo whose name contains the case number -- split
     out of find_related so the per-repo fetches (independent of each
