@@ -240,6 +240,118 @@ class FindRelatedTests(unittest.TestCase):
             ado_api.find_related(cfg, "T1")
 
 
+class OrgNameTests(unittest.TestCase):
+    def test_extracts_org_from_dev_azure_com_url(self):
+        self.assertEqual(ado_api._org_name("https://dev.azure.com/myorg"), "myorg")
+
+    def test_extracts_org_from_visualstudio_com_url(self):
+        self.assertEqual(ado_api._org_name("https://myorg.visualstudio.com"), "myorg")
+
+    def test_trailing_slash_does_not_break_extraction(self):
+        self.assertEqual(ado_api._org_name("https://dev.azure.com/myorg/"), "myorg")
+
+    def test_none_or_unrecognized_url_returns_none(self):
+        self.assertIsNone(ado_api._org_name(None))
+        self.assertIsNone(ado_api._org_name("https://example.com/notado"))
+
+
+class ParseDirectReferencesTests(unittest.TestCase):
+    CFG = {"org_url": "https://dev.azure.com/myorg"}
+
+    def test_finds_a_pull_request_link(self):
+        text = "See https://dev.azure.com/myorg/MyProject/_git/my-repo/pullrequest/123 for the fix."
+        prs, branches = ado_api.parse_direct_references(self.CFG, text)
+        self.assertEqual(prs, [{"project": "MyProject", "repo": "my-repo", "id": 123}])
+        self.assertEqual(branches, [])
+
+    def test_finds_a_branch_link(self):
+        text = "Working on https://dev.azure.com/myorg/MyProject/_git/my-repo?version=GBfeature%2Ffix-123"
+        prs, branches = ado_api.parse_direct_references(self.CFG, text)
+        self.assertEqual(branches, [{"project": "MyProject", "repo": "my-repo", "branch": "feature/fix-123"}])
+        self.assertEqual(prs, [])
+
+    def test_finds_a_visualstudio_com_style_link(self):
+        cfg = {"org_url": "https://myorg.visualstudio.com"}
+        text = "https://myorg.visualstudio.com/MyProject/_git/my-repo/pullrequest/9"
+        prs, _ = ado_api.parse_direct_references(cfg, text)
+        self.assertEqual(prs, [{"project": "MyProject", "repo": "my-repo", "id": 9}])
+
+    def test_ignores_a_link_pointing_at_a_different_org(self):
+        text = "https://dev.azure.com/someoneelseorg/MyProject/_git/my-repo/pullrequest/123"
+        prs, branches = ado_api.parse_direct_references(self.CFG, text)
+        self.assertEqual(prs, [])
+        self.assertEqual(branches, [])
+
+    def test_deduplicates_the_same_link_seen_twice(self):
+        text = ("https://dev.azure.com/myorg/MyProject/_git/my-repo/pullrequest/123 "
+                "and again https://dev.azure.com/myorg/MyProject/_git/my-repo/pullrequest/123")
+        prs, _ = ado_api.parse_direct_references(self.CFG, text)
+        self.assertEqual(len(prs), 1)
+
+    def test_no_org_url_configured_returns_empty_without_crashing(self):
+        prs, branches = ado_api.parse_direct_references({"org_url": None}, "https://dev.azure.com/myorg/P/_git/R/pullrequest/1")
+        self.assertEqual(prs, [])
+        self.assertEqual(branches, [])
+
+    def test_empty_text_returns_empty_without_crashing(self):
+        self.assertEqual(ado_api.parse_direct_references(self.CFG, ""), ([], []))
+        self.assertEqual(ado_api.parse_direct_references(self.CFG, None), ([], []))
+
+
+class GetPullRequestTests(unittest.TestCase):
+    def test_fetches_a_single_pr_by_id_and_resolves_its_clone_url(self):
+        cfg = {**CFG, "project": None}
+        pr = {"pullRequestId": 7, "title": "Fix T1 bug", "status": "active",
+              "createdBy": {"displayName": "Jane"}, "repository": {"name": "repoA", "id": "r1"}}
+        routes = {
+            "pullrequests/7": FakeResponse(pr),
+            "git/repositories": FakeResponse({"value": [{"id": "r1", "name": "repoA", "remoteUrl": "https://x/repoA"}]}),
+        }
+        with mock.patch("requests.get", route(routes)):
+            result = ado_api.get_pull_request(cfg, "ProjA", "repoA", 7)
+        self.assertEqual(result["id"], 7)
+        self.assertEqual(result["repo"], "repoA")
+        self.assertEqual(result["clone_url"], "https://x/repoA")
+        self.assertIn("/ProjA/_git/repoA/pullrequest/7", result["url"])
+
+    def test_propagates_http_errors_rather_than_swallowing_them(self):
+        cfg = {**CFG, "project": None}
+        with mock.patch("requests.get", route({}, default_status=404)):
+            with self.assertRaises(requests.HTTPError):
+                ado_api.get_pull_request(cfg, "ProjA", "repoA", 999)
+
+
+class GetBranchTests(unittest.TestCase):
+    def test_fetches_a_single_branch_by_name(self):
+        cfg = {**CFG, "project": None}
+        routes = {
+            "git/repositories?api-version": FakeResponse({"value": [{"id": "r1", "name": "repoA", "remoteUrl": "https://x/repoA"}]}),
+            "/refs?filter=heads": FakeResponse({"value": [{"name": "refs/heads/feature/fix-123"}]}),
+        }
+        with mock.patch("requests.get", route(routes)):
+            result = ado_api.get_branch(cfg, "ProjA", "repoA", "feature/fix-123")
+        self.assertEqual(result["branch"], "feature/fix-123")
+        self.assertEqual(result["clone_url"], "https://x/repoA")
+
+    def test_returns_none_when_the_repo_does_not_exist(self):
+        cfg = {**CFG, "project": None}
+        with mock.patch("requests.get", route({"git/repositories?api-version": FakeResponse({"value": []})})):
+            result = ado_api.get_branch(cfg, "ProjA", "does-not-exist", "main")
+        self.assertIsNone(result)
+
+    def test_returns_none_when_the_branch_does_not_exist_rather_than_raising(self):
+        # A stale link in a CRM note (branch since deleted/merged) shouldn't
+        # fail the whole brief.
+        cfg = {**CFG, "project": None}
+        routes = {
+            "git/repositories?api-version": FakeResponse({"value": [{"id": "r1", "name": "repoA", "remoteUrl": "https://x/repoA"}]}),
+            "/refs?filter=heads": FakeResponse({"value": []}),
+        }
+        with mock.patch("requests.get", route(routes)):
+            result = ado_api.get_branch(cfg, "ProjA", "repoA", "long-gone-branch")
+        self.assertIsNone(result)
+
+
 class FindWorkItemsTests(unittest.TestCase):
     def test_maps_fields_from_the_work_item_batch_response(self):
         cfg = {**CFG, "project": "ProjA", "search_fields": ["System.Title"]}

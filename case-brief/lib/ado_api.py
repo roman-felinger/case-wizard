@@ -1,26 +1,48 @@
 """Azure DevOps lookups via a self-service PAT: branches and pull requests
 related to a case number.
 
-If config.json's azure_devops.project is left unset, this searches EVERY
-project in the org rather than making you know which one holds the relevant
-repo -- convenient, but slower and more API calls the more projects you have
-(capped at MAX_PROJECTS as a safety net for very large orgs).
+Two ways to find them, in order of preference:
 
-There's no server-side full-text search for branches/PRs the way WIQL gives
-us for work items, so this fetches candidates (all repos' branches, recent
-PRs per project) and filters client-side for the case number appearing in
-the name/title/description. The PR search per project is capped at
-DEFAULT_MAX_PRS most recent (override via azure_devops.max_prs in
-config.json), since there's no way to ask the API for "PRs from all time"
-cheaply.
+  - Direct (parse_direct_references + get_pull_request/get_branch): CRM
+    notes/description/custom fields often already contain an actual link a
+    support engineer pasted while working the case. If one's there, this
+    resolves it with exactly one API call -- no searching required. This is
+    the fast path and, by default, the *only* path (see case_brief.py).
+
+  - Broad search (find_related, opt-in via --search-ado /
+    azure_devops.broad_search): when nothing was linked directly, falls
+    back to fetching candidates (all repos' branches, recent PRs per
+    project, across every project if azure_devops.project is unset) and
+    filtering client-side for the case number appearing in the
+    name/title/description -- there's no server-side full-text search for
+    branches/PRs the way WIQL gives us for work items. This is the
+    expensive path: an org with many projects/repos means many API calls,
+    which is exactly why it's no longer the default. The PR search per
+    project is capped at DEFAULT_MAX_PRS most recent (override via
+    azure_devops.max_prs), since there's no way to ask the API for "PRs
+    from all time" cheaply. Projects searched are capped at MAX_PROJECTS as
+    a safety net for very large orgs.
 """
 import base64
 import os
+import re
+from urllib.parse import quote, unquote
 
 import requests
 
 DEFAULT_MAX_PRS = 50
 MAX_PROJECTS = 50
+
+# Matches an Azure DevOps PR or branch link pasted into CRM (description,
+# a note, a custom field -- anywhere free text ends up). Both link shapes
+# share the same .../{project}/_git/{repo} prefix and only differ in the
+# tail, so one regex covers both rather than running two full passes.
+_ADO_LINK_RE = re.compile(
+    r"https?://(?:dev\.azure\.com/(?P<org1>[^/\s]+)|(?P<org2>[^./\s]+)\.visualstudio\.com)"
+    r"/(?P<project>[^/\s]+)/_git/(?P<repo>[^/\s?]+)"
+    r"(?:/pullrequest/(?P<pr_id>\d+)|\?(?:[^\s\"'<>]*[?&])?version=GB(?P<branch>[^&\s\"'<>]+))",
+    re.IGNORECASE,
+)
 
 
 def _auth_header(pat):
@@ -74,6 +96,123 @@ def get_repo(cfg, project, repo_name):
         if repo["name"].lower() == repo_name.lower():
             return repo
     return None
+
+
+def _org_name(org_url):
+    """'https://dev.azure.com/myorg' or 'https://myorg.visualstudio.com' -> 'myorg'."""
+    if not org_url:
+        return None
+    m = re.match(
+        r"https?://(?:dev\.azure\.com/(?P<a>[^/\s]+)|(?P<b>[^./\s]+)\.visualstudio\.com)",
+        org_url.rstrip("/") + "/",
+    )
+    if not m:
+        return None
+    return m.group("a") or m.group("b")
+
+
+def parse_direct_references(cfg, text):
+    """Scans arbitrary text (CRM description/notes/activities/custom
+    fields) for actual Azure DevOps PR/branch links -- the same links a
+    person would click, e.g. pasted by a support engineer while working
+    the case. Only links pointing at *this* org (azure_devops.org_url) are
+    trusted; a link into a different org can't be resolved with this PAT
+    anyway, and could just as easily be a customer's own unrelated org
+    mentioned in the text.
+
+    Returns (pr_refs, branch_refs), each a de-duplicated list of dicts
+    ({project, repo, id} / {project, repo, branch}) ready to hand straight
+    to get_pull_request/get_branch. This is the fast path that replaces an
+    org-wide brute-force search when the case already says exactly where
+    to look.
+    """
+    if not text:
+        return [], []
+    org_name = _org_name(cfg.get("org_url"))
+    if not org_name:
+        return [], []
+
+    pr_refs, branch_refs = [], []
+    seen_pr, seen_branch = set(), set()
+    for m in _ADO_LINK_RE.finditer(text):
+        org = m.group("org1") or m.group("org2")
+        if not org or org.lower() != org_name.lower():
+            continue
+        project = unquote(m.group("project"))
+        repo = unquote(m.group("repo"))
+
+        if m.group("pr_id"):
+            key = (project.lower(), repo.lower(), m.group("pr_id"))
+            if key in seen_pr:
+                continue
+            seen_pr.add(key)
+            pr_refs.append({"project": project, "repo": repo, "id": int(m.group("pr_id"))})
+        elif m.group("branch"):
+            branch = unquote(m.group("branch"))
+            key = (project.lower(), repo.lower(), branch.lower())
+            if key in seen_branch:
+                continue
+            seen_branch.add(key)
+            branch_refs.append({"project": project, "repo": repo, "branch": branch})
+
+    return pr_refs, branch_refs
+
+
+def get_pull_request(cfg, project, repo, pr_id):
+    """Fetches exactly one PR by id -- the targeted counterpart to
+    find_related's 'search every PR in every project' path, used when a
+    CRM note/field already links straight to it."""
+    pat = _get_pat(cfg)
+    org_url = cfg["org_url"].rstrip("/")
+    url = f"{org_url}/{project}/_apis/git/pullrequests/{pr_id}?api-version=7.1"
+    resp = requests.get(url, headers=_auth_header(pat), timeout=30)
+    resp.raise_for_status()
+    pr = resp.json()
+
+    repo_name = pr["repository"]["name"]
+    repo_info = get_repo(cfg, project, repo_name)
+    return {
+        "project": project,
+        "id": pr["pullRequestId"],
+        "repo": repo_name,
+        "title": pr.get("title"),
+        "status": pr.get("status"),
+        "created_by": (pr.get("createdBy") or {}).get("displayName"),
+        "url": f"{org_url}/{project}/_git/{repo_name}/pullrequest/{pr['pullRequestId']}",
+        "clone_url": (repo_info or {}).get("remoteUrl"),
+    }
+
+
+def get_branch(cfg, project, repo, branch_name):
+    """Fetches exactly one branch by name -- the targeted counterpart to
+    find_related's 'list every ref in every repo' path. Returns None if the
+    repo or the branch itself doesn't exist (e.g. already deleted/merged),
+    rather than raising -- a stale link in a CRM note shouldn't fail the
+    whole brief."""
+    repo_info = get_repo(cfg, project, repo)
+    if not repo_info:
+        return None
+
+    pat = _get_pat(cfg)
+    org_url = cfg["org_url"].rstrip("/")
+    url = (
+        f"{org_url}/{project}/_apis/git/repositories/{repo_info['id']}/refs"
+        f"?filter=heads/{quote(branch_name, safe='')}&api-version=7.1"
+    )
+    resp = requests.get(url, headers=_auth_header(pat), timeout=30)
+    resp.raise_for_status()
+
+    target = f"refs/heads/{branch_name}"
+    match = next((r for r in resp.json().get("value", []) if r["name"] == target), None)
+    if not match:
+        return None
+    return {
+        "project": project,
+        "repo": repo_info["name"],
+        "branch": branch_name,
+        "url": f"{org_url}/{project}/_git/{repo_info['name']}?version=GB{quote(branch_name, safe='')}",
+        "clone_url": repo_info.get("remoteUrl"),
+    }
 
 
 def find_related(cfg, case_number):

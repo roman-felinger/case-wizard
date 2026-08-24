@@ -32,28 +32,67 @@ Two independent data sources are gathered, then merged into one Markdown report:
    registration needed) or a case tab is simply open (no ticket number → auto-detect
    via `crm_scrape.extract`). The window is closed by the script itself at the end of
    every run — sessions don't persist between runs by design, but the last-used
-   CRM/BC URLs are cached to `.last_urls.json` so they reopen automatically next time.
+   CRM URL is cached to `.last_urls.json` so it reopens automatically next time.
+
+   Scrapes the whole case, not a curated subset: the incident record is fetched with
+   no `$select` at all (Dataverse returns every populated attribute when it's
+   omitted), so an org's own custom fields — e.g. an "internal description" that a
+   fixed field list used to silently drop — show up too, labeled via a best-effort
+   `EntityDefinitions` metadata call (`crm_scrape.get_attribute_metadata`, cached per
+   origin; degrades to raw logical names if metadata read is denied). Customer/owner
+   are resolved from the lookup's own display-name annotation rather than
+   `$expand` — this also fixed two latent gaps: a contact-type customer (the old
+   `$expand=customerid_account` only ever worked for an account) and a team-owned
+   case (`$expand=owninguser` only ever worked for a user owner). Notes and the
+   Activity Timeline (phone calls, emails, tasks) live in separate Dataverse entities
+   (`annotation` / `activitypointer`) and are fetched separately
+   (`crm_scrape.get_notes` / `get_activities`), each capped (`NOTES_TOP` /
+   `ACTIVITIES_TOP`) with truncation surfaced rather than silently dropped, same
+   pattern as ADO's `max_prs`.
+
+   Most of those "get everything" fields are org-specific noise most of the time,
+   so `report.build_markdown`'s `promoted_fields` param (default:
+   `report.DEFAULT_PROMOTED_FIELDS`, overridable via config.json's
+   `crm_promoted_fields`) pulls specific fields out by `logical_name` into their
+   own proper subsection right after Description — everything else lands in an
+   uncurated "Other CRM Fields" section at the very bottom of the brief instead
+   of cluttering the top.
 
 2. **Azure DevOps (`lib/ado_api.py`)** — real REST API via a self-service PAT
-   (`AZDO_PAT` env var by default). `ado_api.find_related` searches branches/PRs whose
-   name/title/description contains the case number, across every project in the org
-   unless `azure_devops.project` is set. Truncation (`max_prs` cap) is surfaced to the
-   report rather than silently dropped (`prs_truncated`/`max_prs` threaded through to
-   `report.build_markdown`).
+   (`AZDO_PAT` env var by default). Two ways to find related branches/PRs, in order:
 
-3. **Business Central (`lib/bc_scrape.py`, off by default via `--with-bc`)** — scrapes
-   an open BC tab in the same automation Chrome profile. Selectors are still being
-   worked out (multi-frame search, wide aria-label match, raw-text fallback) — see
-   README's Status section before trusting its output.
+   - **Direct (default)** — `case_brief.py::run_ado_lookup` flattens everything CRM
+     scraping just found (title, description, every extra field, every note, every
+     activity — see `_collect_reference_text`) and scans it via
+     `ado_api.parse_direct_references` for actual ADO PR/branch links a support
+     engineer pasted while working the case. Any found are resolved with one targeted
+     API call each (`get_pull_request` / `get_branch`) — no searching.
+   - **Broad search (opt-in fallback, `--search-ado` / `azure_devops.broad_search`)**
+     — only runs when no direct link was found. `ado_api.find_related` fetches
+     candidates (all repos' branches, recent PRs per project, across every project
+     unless `azure_devops.project` is set) and filters client-side for the case
+     number appearing in the name/title/description. This is the expensive path —
+     an org with many projects/repos means many API calls — which is why it's no
+     longer the default; it used to run unconditionally and was the main source of
+     a slow `case_brief.py` run. Truncation (`max_prs` cap) is still surfaced to the
+     report rather than silently dropped (`prs_truncated`/`max_prs` threaded through
+     to `report.build_markdown`).
 
-**Repo suggestion (`case_brief.py::resolve_suggested_repos`)** decides which repo(s) to
-show ready-to-copy `git clone`/`git checkout -b` commands for, even when Azure DevOps
-found zero matching branches/PRs yet (the common case for a brand-new case). Priority
-order: `--repo` flag → `customer_repo_map` entry in config.json → fuzzy-match the CRM
-customer name against ADO project names, then repo names, via
-`difflib.SequenceMatcher` (`_best_fuzzy_match` requires the top match to both clear a
-threshold *and* beat the runner-up by a margin — an ambiguous guess is treated as no
-guess, since it would suggest the wrong repo silently).
+   Either way, `report.build_markdown`'s `ado_note` param carries a plain-language
+   summary of which path ran and what it found/skipped.
+
+The brief no longer suggests a repo to clone/branch commands for -- that guess
+(fuzzy-matching the CRM customer name against ADO project/repo names, or a
+`customer_repo_map` override) moved to case-guide, which is the thing that actually
+needs it (see case-guide/CLAUDE.md's "Repo suggestion"); case-brief's job is just the
+facts (CRM + any directly-linked ADO work), not a guessed next step.
+
+**Azure DevOps section placement** -- `report.build_markdown` renders it right after a
+case's at-a-glance details (Ticket #/Customer/.../Created), before Description/Notes/
+Activity Timeline, on the first successfully-rendered CRM case (`_ado_section_lines` +
+the `ado_rendered` guard) -- it's whole-run data, not per-case, so it's rendered once
+even with multiple CRM results, with a fallback render at the end for when no case
+rendered at all (no CRM tab open, or every result errored).
 
 **Config merge order** (`load_config` → `apply_cli_overrides`): `DEFAULTS` dict →
 `config.json` (deep-merged) → CLI flags, each layer overriding the previous. Every
@@ -61,5 +100,5 @@ setting is reachable by either config.json or a flag; there is no setting that
 requires editing config.json.
 
 `lib/report.py` is the only place that renders the final Markdown and writes/opens it
-in VS Code — CRM, ADO, and BC results are plain dicts/lists by the time they reach it,
+in VS Code — CRM and ADO results are plain dicts/lists by the time they reach it,
 with no formatting logic living in the scrapers themselves.

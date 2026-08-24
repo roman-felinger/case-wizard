@@ -4,9 +4,9 @@ modules can read whatever pages you have open there.
 
 This profile is separate from your everyday Chrome profile -- it won't touch
 your normal history, bookmarks, or logins. The first time you use it, sign
-into CRM / Azure DevOps / Business Central by hand in the window it opens;
-the session cookies persist in the profile folder afterwards like any browser,
-so you generally only log in once (until a session expires).
+into CRM / Azure DevOps by hand in the window it opens; the session cookies
+persist in the profile folder afterwards like any browser, so you generally
+only log in once (until a session expires).
 """
 import json
 import os
@@ -60,11 +60,20 @@ def _cdp_alive(port):
         return False
 
 
-def ensure_chrome(cfg):
+def ensure_chrome(cfg, visible=False, extra_urls=None):
     """Makes sure a debuggable Chrome is running, launching it if needed.
     Returns (port, launched_fresh) -- launched_fresh is True only when this
     call actually started a new Chrome process (vs. reusing one already
     running from a previous invocation you left open).
+
+    visible=False (default, case-brief's own CLI usage): opens minimized so
+    it doesn't steal focus from whatever you're doing at the terminal.
+    visible=True (case-wizard's desktop app, where this window IS the
+    thing you're looking at): opens normally, focused.
+
+    extra_urls, if given, are opened as additional tabs on a fresh launch
+    only (e.g. the app's own dashboard URL) - on top of whatever CRM
+    pages you last had open (see load_last_urls below).
 
     Does NOT wait for you to log in -- pair this with wait_until_ready()
     below, which polls instead of blocking on a keypress.
@@ -78,19 +87,22 @@ def ensure_chrome(cfg):
     chrome_exe = find_chrome_exe(cfg.get("executable"))
 
     print(f"Launching dedicated Chrome profile at {profile_dir} (debug port {port})...")
-    print("It opens minimized (won't steal focus) -- check your taskbar for a second Chrome icon and sign into CRM there.")
-    print("It'll be closed automatically once this run finishes.")
+    if visible:
+        print("Sign into CRM there if prompted.")
+    else:
+        print("It opens minimized (won't steal focus) -- check your taskbar for a second Chrome icon and sign into CRM there.")
+        print("It'll be closed automatically once this run finishes.")
 
-    # Reopen whatever CRM/BC pages you last had open, so a fresh launch (e.g. after
+    # Reopen whatever CRM pages you last had open, so a fresh launch (e.g. after
     # you did close the window) doesn't also make you retype the URL from scratch.
     # You'll still need to sign in again if the session itself expired.
     last_urls = load_last_urls()
-    reopen_urls = [u for u in last_urls.values() if u]
+    reopen_urls = list(extra_urls or []) + [u for u in last_urls.values() if u]
 
-    # Launch minimized so it doesn't steal focus from whatever you're doing --
-    # SW_SHOWMINNOACTIVE (7) shows the window minimized without activating it.
+    # SW_SHOWMINNOACTIVE (7) shows the window minimized without activating
+    # it - only applied when visible=False (case-brief's own CLI usage).
     startupinfo = None
-    if os.name == "nt":
+    if not visible and os.name == "nt":
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startupinfo.wShowWindow = 7

@@ -1,18 +1,15 @@
 """Unit tests for case_brief.py's pure-logic, security/correctness-sensitive
 pieces: the config merge order (DEFAULTS -> config.json -> CLI flags,
-apply_cli_overrides/load_config), find_customer_repo's substring matching,
-and resolve_suggested_repos' fuzzy auto-match -- especially
-_best_fuzzy_match's ambiguity guard, which exists specifically so a case
-with two similarly-named candidate projects/repos never gets a silently
-wrong repo suggested with the same confidence as a real match.
+apply_cli_overrides/load_config) and run_ado_lookup's direct-reference vs.
+broad-search branching.
 
 Deliberately not exhaustive over every CLI flag or every branch of
 build_parser/main -- those are low-risk plumbing, easily eyeballed with
 `--demo --show-prompt`-style manual runs. This file locks in the handful of
 things that would otherwise fail silently and misleadingly: a CLI flag that
 should win over config.json but doesn't (or vice versa), a config-merge that
-clobbers a whole sub-dict instead of merging it, and a fuzzy match that
-looks confident but is actually a coin flip between two candidates.
+clobbers a whole sub-dict instead of merging it, and a direct ADO reference
+that should skip the (slow, opt-in) broad search but doesn't.
 
 Run with: python -m unittest discover -s tests -v   (from case-brief/)
       or: python -m pytest tests                     (if pytest is installed)
@@ -31,13 +28,14 @@ import case_brief as cb
 
 def make_args(**overrides):
     """A minimal argparse.Namespace stand-in with every field
-    apply_cli_overrides/resolve_suggested_repos reads, defaulting to the
-    "flag not passed" value (None/False) unless overridden."""
+    apply_cli_overrides reads, defaulting to the "flag not passed" value
+    (None/False) unless overridden."""
     defaults = dict(
         case_number=None, demo=False, skip_ado=False, skip_browser=False,
-        with_bc=False, no_open=False, org_url=None, project=None, max_prs=None,
-        pat_env_var=None, repo=None, ticket_field=None, crm_host=None,
-        bc_host=None, chrome_profile_dir=None, chrome_port=None, output_dir=None,
+        no_open=False, org_url=None, project=None, max_prs=None,
+        pat_env_var=None, ticket_field=None, crm_host=None,
+        chrome_profile_dir=None, chrome_port=None, output_dir=None,
+        search_ado=False,
     )
     defaults.update(overrides)
     return types.SimpleNamespace(**defaults)
@@ -119,138 +117,111 @@ class ApplyCliOverridesTests(unittest.TestCase):
         cb.apply_cli_overrides(cfg, args)
         self.assertEqual(cfg["url_patterns"]["crm_host_contains"], ["mycrm.example.com"])
 
-
-class FindCustomerRepoTests(unittest.TestCase):
-    def test_case_insensitive_substring_match(self):
-        cfg = {"customer_repo_map": [{"customer_contains": "Contoso", "project": "P1", "repo": "R1"}]}
-        rule = cb.find_customer_repo(cfg, "CONTOSO s.r.o.")
-        self.assertEqual(rule["project"], "P1")
-
-    def test_no_match_returns_none(self):
-        cfg = {"customer_repo_map": [{"customer_contains": "Contoso", "project": "P1", "repo": "R1"}]}
-        self.assertIsNone(cb.find_customer_repo(cfg, "Fabrikam"))
-
-    def test_empty_customer_name_returns_none_without_crashing(self):
-        cfg = {"customer_repo_map": [{"customer_contains": "Contoso", "project": "P1", "repo": "R1"}]}
-        self.assertIsNone(cb.find_customer_repo(cfg, None))
-        self.assertIsNone(cb.find_customer_repo(cfg, ""))
-
-    def test_missing_customer_repo_map_key_returns_none(self):
-        self.assertIsNone(cb.find_customer_repo({}, "Contoso"))
-
-
-class BestFuzzyMatchTests(unittest.TestCase):
-    def test_clear_winner_is_returned(self):
-        result = cb._best_fuzzy_match("Contoso Ltd", ["Contoso", "Fabrikam", "Northwind"])
-        self.assertIsNotNone(result)
-        self.assertEqual(result[0], "Contoso")
-
-    def test_ambiguous_top_two_candidates_refuses_to_guess(self):
-        # Two candidates that normalize to something equally close to the
-        # target must NOT produce a confident-looking single answer --
-        # guessing wrong here would silently point someone at the wrong repo.
-        result = cb._best_fuzzy_match("Contoso", ["Contoso Corp", "Contoso Inc"])
-        self.assertIsNone(result)
-
-    def test_top_two_within_min_lead_refuses_to_guess_even_without_a_tie(self):
-        # Not a literal tie -- just too close together (lead < min_lead) --
-        # must still be treated as ambiguous rather than picking the higher one.
-        result = cb._best_fuzzy_match("Northwind Traders", ["Northwind", "Northwind Trading Co"])
-        self.assertIsNone(result)
-
-    def test_below_threshold_returns_none_even_as_the_best_of_a_bad_set(self):
-        result = cb._best_fuzzy_match("Zzyzx Corp", ["Contoso", "Fabrikam"])
-        self.assertIsNone(result)
-
-    def test_empty_candidate_list_returns_none(self):
-        self.assertIsNone(cb._best_fuzzy_match("Contoso", []))
-
-    def test_single_candidate_only_needs_to_clear_the_threshold(self):
-        # With no runner-up, min_lead can't disqualify it -- score alone decides.
-        result = cb._best_fuzzy_match("Contoso", ["Contoso"])
-        self.assertEqual(result[0], "Contoso")
-
-
-class ResolveSuggestedReposTests(unittest.TestCase):
-    def _cfg(self, org_url="https://dev.azure.com/org", customer_repo_map=None):
+    def test_search_ado_flag_turns_on_broad_search(self):
         cfg = copy.deepcopy(cb.DEFAULTS)
-        cfg["azure_devops"]["org_url"] = org_url
-        cfg["customer_repo_map"] = customer_repo_map or []
+        self.assertFalse(cfg["azure_devops"]["broad_search"])
+        args = make_args(search_ado=True)
+        cb.apply_cli_overrides(cfg, args)
+        self.assertTrue(cfg["azure_devops"]["broad_search"])
+
+    def test_search_ado_not_passed_leaves_broad_search_off(self):
+        cfg = copy.deepcopy(cb.DEFAULTS)
+        args = make_args()
+        cb.apply_cli_overrides(cfg, args)
+        self.assertFalse(cfg["azure_devops"]["broad_search"])
+
+
+class CollectReferenceTextTests(unittest.TestCase):
+    def test_gathers_title_description_extra_fields_notes_and_activities(self):
+        crm_results = [{
+            "title": "T", "description": "D",
+            "all_fields": [{"value": "F"}],
+            "notes": [{"subject": "NS", "text": "NT"}],
+            "activities": [{"subject": "AS", "description": "AD"}],
+        }]
+        text = cb._collect_reference_text(crm_results)
+        for expected in ("T", "D", "F", "NS", "NT", "AS", "AD"):
+            self.assertIn(expected, text)
+
+    def test_error_result_is_skipped(self):
+        crm_results = [{"error": "boom", "url": "https://x"}]
+        self.assertEqual(cb._collect_reference_text(crm_results), "")
+
+    def test_non_string_values_do_not_crash(self):
+        crm_results = [{"title": None, "all_fields": [{"value": 123}], "notes": [{"subject": None}]}]
+        self.assertEqual(cb._collect_reference_text(crm_results), "")
+
+    def test_empty_or_none_input_returns_empty_string(self):
+        self.assertEqual(cb._collect_reference_text([]), "")
+        self.assertEqual(cb._collect_reference_text(None), "")
+
+
+class RunAdoLookupTests(unittest.TestCase):
+    def _cfg(self, **azure_overrides):
+        cfg = copy.deepcopy(cb.DEFAULTS)
+        cfg["azure_devops"]["org_url"] = "https://dev.azure.com/myorg"
+        cfg["azure_devops"].update(azure_overrides)
         return cfg
 
-    def test_cli_repo_flag_takes_priority_over_everything_else(self):
-        cfg = self._cfg(customer_repo_map=[{"customer_contains": "acme", "project": "PX", "repo": "RX"}])
-        args = make_args(repo="ProjA/repoA")
-        crm_results = [{"customer": "Acme Corp"}]
-        with mock.patch.object(cb.ado_api, "get_repo", return_value={"name": "repoA", "remoteUrl": "https://x/repoA"}):
-            result = cb.resolve_suggested_repos(cfg, args, crm_results)
-        self.assertEqual(result, [{"project": "ProjA", "repo": "repoA", "clone_url": "https://x/repoA", "source": "cli"}])
-
-    def test_malformed_repo_flag_is_ignored_and_falls_through_to_next_priority(self):
-        # No "/" in --repo can't be split into project/repo -- rather than
-        # crashing or silently returning nothing, it should warn and fall
-        # through to the next source (customer_repo_map here).
-        cfg = self._cfg(customer_repo_map=[{"customer_contains": "acme", "project": "PMap", "repo": "RMap"}])
-        args = make_args(repo="not-a-project-slash-repo")
-        crm_results = [{"customer": "Acme Corp"}]
-        with mock.patch.object(cb.ado_api, "get_repo", return_value=None):
-            result = cb.resolve_suggested_repos(cfg, args, crm_results)
-        self.assertEqual(result, [{"project": "PMap", "repo": "RMap", "clone_url": None, "source": "customer_repo_map"}])
-
-    def test_customer_repo_map_used_when_no_repo_flag(self):
-        cfg = self._cfg(customer_repo_map=[{"customer_contains": "acme", "project": "PMap", "repo": "RMap"}])
+    def test_no_org_url_configured_is_an_error(self):
+        cfg = copy.deepcopy(cb.DEFAULTS)
         args = make_args()
-        crm_results = [{"customer": "Acme Corp"}]
-        with mock.patch.object(cb.ado_api, "get_repo", return_value={"name": "RMap", "remoteUrl": "https://x/RMap"}):
-            result = cb.resolve_suggested_repos(cfg, args, crm_results)
-        self.assertEqual(result[0]["source"], "customer_repo_map")
+        branches, prs, ado_error, ado_note, truncated, max_prs = cb.run_ado_lookup(cfg, args, [])
+        self.assertIn("no Azure DevOps org URL configured", ado_error)
+        self.assertEqual((branches, prs), ([], []))
 
-    def test_no_crm_results_returns_empty_list(self):
+    def test_direct_reference_found_resolves_it_and_skips_the_broad_search(self):
         cfg = self._cfg()
         args = make_args()
-        self.assertEqual(cb.resolve_suggested_repos(cfg, args, []), [])
+        crm_results = [{"description": "https://dev.azure.com/myorg/P/_git/R/pullrequest/5"}]
+        pr = {"project": "P", "id": 5, "repo": "R", "title": "t", "status": "active",
+              "created_by": "x", "url": "u", "clone_url": None}
+        with mock.patch.object(cb.ado_api, "get_pull_request", return_value=pr) as get_pr, \
+             mock.patch.object(cb.ado_api, "find_related") as find_related:
+            branches, prs, ado_error, ado_note, truncated, max_prs = cb.run_ado_lookup(cfg, args, crm_results)
+        get_pr.assert_called_once_with(cfg["azure_devops"], "P", "R", 5)
+        find_related.assert_not_called()
+        self.assertEqual(prs, [pr])
+        self.assertIsNone(ado_error)
+        self.assertIn("Resolved 1/1", ado_note)
 
-    def test_crm_error_result_returns_empty_list(self):
+    def test_no_direct_reference_and_broad_search_disabled_skips_the_search(self):
+        cfg = self._cfg(broad_search=False)
+        args = make_args()
+        with mock.patch.object(cb.ado_api, "find_related") as find_related:
+            branches, prs, ado_error, ado_note, truncated, max_prs = cb.run_ado_lookup(cfg, args, [])
+        find_related.assert_not_called()
+        self.assertEqual((branches, prs), ([], []))
+        self.assertIn("org-wide search skipped", ado_note)
+
+    def test_no_direct_reference_and_broad_search_enabled_falls_back_to_find_related(self):
+        cfg = self._cfg(broad_search=True)
+        args = make_args(case_number="T1")
+        with mock.patch.object(cb.ado_api, "find_related", return_value=([{"b": 1}], [{"p": 1}], False, 50)) as find_related:
+            branches, prs, ado_error, ado_note, truncated, max_prs = cb.run_ado_lookup(cfg, args, [])
+        find_related.assert_called_once_with(cfg["azure_devops"], "T1")
+        self.assertEqual(branches, [{"b": 1}])
+        self.assertEqual(prs, [{"p": 1}])
+        self.assertIn("full org-wide search", ado_note)
+
+    def test_broad_search_enabled_but_no_case_number_available_is_an_error(self):
+        cfg = self._cfg(broad_search=True)
+        args = make_args()
+        with mock.patch.object(cb.ado_api, "find_related") as find_related:
+            branches, prs, ado_error, ado_note, truncated, max_prs = cb.run_ado_lookup(cfg, args, [])
+        find_related.assert_not_called()
+        self.assertIn("no case number given", ado_error)
+
+    def test_a_failed_direct_reference_is_reported_in_the_note_not_raised(self):
         cfg = self._cfg()
         args = make_args()
-        crm_results = [{"error": "No authenticated CRM tab found.", "url": ""}]
-        self.assertEqual(cb.resolve_suggested_repos(cfg, args, crm_results), [])
-
-    def test_no_org_url_skips_auto_match_and_returns_empty(self):
-        cfg = self._cfg(org_url=None)
-        args = make_args()
-        crm_results = [{"customer": "Acme Corp"}]
-        self.assertEqual(cb.resolve_suggested_repos(cfg, args, crm_results), [])
-
-    def test_ambiguous_repo_within_a_matched_project_lists_all_rather_than_guessing(self):
-        cfg = self._cfg()
-        args = make_args()
-        crm_results = [{"customer": "Acme Corp"}]
-        repos = [{"name": "Acme Corp Billing", "remoteUrl": "https://x/billing"},
-                 {"name": "Acme Corp Legacy", "remoteUrl": "https://x/legacy"}]
-        with mock.patch.object(cb.ado_api, "list_projects", return_value=["Acme Corp"]), \
-             mock.patch.object(cb.ado_api, "list_repos", return_value=repos):
-            result = cb.resolve_suggested_repos(cfg, args, crm_results)
-        self.assertEqual(len(result), 2)
-        self.assertTrue(all(r["source"] == "auto-match" for r in result))
-
-    def test_single_repo_in_matched_project_is_returned_directly(self):
-        cfg = self._cfg()
-        args = make_args()
-        crm_results = [{"customer": "Acme Corp"}]
-        repos = [{"name": "acme-billing", "remoteUrl": "https://x/billing"}]
-        with mock.patch.object(cb.ado_api, "list_projects", return_value=["Acme Corp"]), \
-             mock.patch.object(cb.ado_api, "list_repos", return_value=repos):
-            result = cb.resolve_suggested_repos(cfg, args, crm_results)
-        self.assertEqual(result, [{"project": "Acme Corp", "repo": "acme-billing", "clone_url": "https://x/billing", "source": "auto-match"}])
-
-    def test_project_listing_failure_degrades_to_empty_list_not_a_crash(self):
-        cfg = self._cfg()
-        args = make_args()
-        crm_results = [{"customer": "Acme Corp"}]
-        with mock.patch.object(cb.ado_api, "list_projects", side_effect=RuntimeError("boom")):
-            result = cb.resolve_suggested_repos(cfg, args, crm_results)
-        self.assertEqual(result, [])
+        crm_results = [{"description": "https://dev.azure.com/myorg/P/_git/R/pullrequest/5"}]
+        with mock.patch.object(cb.ado_api, "get_pull_request", side_effect=RuntimeError("404")):
+            branches, prs, ado_error, ado_note, truncated, max_prs = cb.run_ado_lookup(cfg, args, crm_results)
+        self.assertEqual(prs, [])
+        self.assertIsNone(ado_error)
+        self.assertIn("0/1", ado_note)
+        self.assertIn("1 could not be resolved", ado_note)
 
 
 if __name__ == "__main__":

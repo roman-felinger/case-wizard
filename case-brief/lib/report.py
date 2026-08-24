@@ -8,25 +8,100 @@ def _safe_name(text):
     return re.sub(r"[^\w.-]+", "_", str(text)).strip("_") or "unlabeled"
 
 
-def _slugify(text, max_len=50):
+_MD_BLOCK_TRIGGER = re.compile(r"^(#{1,6}(\s|$)|[=\-_*]+$|>|```|~~~)")
+
+
+def _sanitize_freetext_for_markdown(text):
+    """Neutralize freeform text (e.g. a CRM ticket description) so it
+    always renders as plain paragraphs, regardless of what a support
+    agent typed or how CRM's rich-text-to-plain-text conversion
+    punctuated it.
+
+    Fixes two real, observed failure modes:
+    1. CRM's blank-paragraph markers often come through as U+00A0
+       (non-breaking space) rather than a truly empty line, which
+       Markdown does NOT treat as a paragraph break - the whole
+       run of text stays one unbroken paragraph.
+    2. If that unbroken paragraph is then immediately followed by a line
+       that's just dashes/equals (a support agent's own divider, or
+       leftover HTML), Markdown reads it as a Setext heading underline
+       and renders the *entire* paragraph as one giant <h1>/<h2> - this
+       happened for real with a description ending in a lone "--" line.
+    """
     if not text:
-        return ""
-    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-    return slug[:max_len].rstrip("-")
+        return text
+    out = []
+    for line in text.split("\n"):
+        # Anything left over is a paragraph break in spirit - normalize
+        # to a real blank line so Markdown treats it as one. Explicit
+        # chars, not str.strip()'s default: Python's default strip()
+        # already treats \xa0 as whitespace (str.isspace() is True for
+        # it), which would make an nbsp-only line strip down to "" and
+        # get missed by an `if stripped:` check done *after* stripping.
+        if not line.strip("\xa0 \t\r"):
+            out.append("")
+            continue
+        stripped = line.strip()
+        if _MD_BLOCK_TRIGGER.match(stripped):
+            line = "\\" + stripped
+        out.append(line)
+    return "\n".join(out)
 
 
-def _branch_name(case_number, title):
-    case_part = _safe_name(case_number).replace("_", "-")
-    slug = _slugify(title)
-    return f"{case_part}-{slug}" if slug else case_part
+# Custom CRM fields surfaced as their own proper subsection right after
+# Description, in this order, instead of getting buried in the generic
+# "Other CRM Fields" dump at the bottom -- see build_markdown's
+# `promoted_fields` param. Matched by logical_name (stable across a field's
+# display label changing), overridable via config.json's
+# `crm_promoted_fields` (case_brief.py's DEFAULTS).
+DEFAULT_PROMOTED_FIELDS = [
+    "art_internaldescriptionandnotes",  # "Interní popis & poznámky"
+    "art_additionalpublicdescription",  # "Dodatečný veřejný popis"
+]
 
 
-def build_markdown(case_number, crm_results, branches, pull_requests, bc_results,
-                    ado_error=None, include_bc=True, prs_truncated=False, max_prs=None,
-                    suggested_repos=None):
+def _ado_section_lines(ado_error, ado_note, branches, pull_requests, prs_truncated, max_prs):
+    """The '## Azure DevOps' section's lines, as its own helper so
+    build_markdown can slot it in right after a case's core details (see the
+    "pulled up to the details" placement below) instead of building it
+    inline exactly where it prints."""
+    lines = ["## Azure DevOps — Related Branches & Pull Requests"]
+    if ado_error:
+        lines.append(f"_Could not query Azure DevOps: {ado_error}_")
+        return lines
+    if ado_note:
+        lines.append(f"_{ado_note}_")
+        lines.append("")
+    lines.append("**Branches:**")
+    if not branches:
+        lines.append("_No matching branches found._")
+    else:
+        for b in branches:
+            lines.append(f"- [{b['project']}/{b['repo']}: {b['branch']}]({b['url']})")
+    lines.append("")
+    lines.append("**Pull requests:**")
+    if not pull_requests:
+        lines.append("_No matching pull requests found._")
+    else:
+        for pr in pull_requests:
+            lines.append(f"- [{pr['project']}/{pr['repo']} !{pr['id']}]({pr['url']}) — {pr.get('title')} ({pr.get('status')}, by {pr.get('created_by') or '—'})")
+    if prs_truncated:
+        lines.append("")
+        lines.append(f"_Only searched the {max_prs} most recent pull requests per project (--max-prs to widen) -- an older one could be missed._")
+    return lines
+
+
+def build_markdown(case_number, crm_results, branches, pull_requests,
+                    ado_error=None, ado_note=None, prs_truncated=False, max_prs=None,
+                    promoted_fields=None):
+    if promoted_fields is None:
+        promoted_fields = DEFAULT_PROMOTED_FIELDS
+
     lines = [f"# Case {case_number}", ""]
+    leftover_by_case = []  # [(case, [field, ...]), ...] -- rendered at the bottom, see below
+    ado_lines = _ado_section_lines(ado_error, ado_note, branches, pull_requests, prs_truncated, max_prs)
+    ado_rendered = False  # the Azure DevOps section is whole-run, not per-case -- render it once
 
-    lines.append("## CRM Case(s)")
     if not crm_results:
         lines.append("_No CRM case tab found open in the automation Chrome window._")
     for c in crm_results:
@@ -41,105 +116,95 @@ def build_markdown(case_number, crm_results, branches, pull_requests, bc_results
         lines.append(f"- **Status:** {c.get('status') or '—'}")
         lines.append(f"- **Created:** {c.get('created_on') or '—'}")
         lines.append("")
+
+        # Pulled up here (right after the at-a-glance details, before the
+        # wall of Description/Notes/Activity Timeline text) rather than
+        # buried after it, on the first case actually rendered.
+        if not ado_rendered:
+            lines.extend(ado_lines)
+            lines.append("")
+            ado_rendered = True
+
         lines.append("**Description:**")
         lines.append("")
-        lines.append(c.get("description") or "_(none)_")
+        lines.append(_sanitize_freetext_for_markdown(c.get("description")) or "_(none)_")
         lines.append("")
-    lines.append("")
 
-    lines.append("## Azure DevOps — Related Branches & Pull Requests")
-    if ado_error:
-        lines.append(f"_Could not query Azure DevOps: {ado_error}_")
-    else:
-        lines.append("**Branches:**")
-        if not branches:
-            lines.append("_No matching branches found._")
+        all_fields = c.get("all_fields") or []
+        by_logical_name = {f["logical_name"]: f for f in all_fields}
+        for logical_name in promoted_fields:
+            f = by_logical_name.get(logical_name)
+            if not f:
+                continue
+            lines.append(f"**{f['label']}:**")
+            lines.append("")
+            lines.append(_sanitize_freetext_for_markdown(str(f["value"])) or "_(none)_")
+            lines.append("")
+
+        leftover = [f for f in all_fields if f["logical_name"] not in promoted_fields]
+        if leftover:
+            leftover_by_case.append((c, leftover))
+
+        lines.append("**Notes:**")
+        lines.append("")
+        if c.get("notes_error"):
+            lines.append(f"_Could not load notes: {c['notes_error']}_")
+        elif not c.get("notes"):
+            lines.append("_No notes on this case._")
         else:
-            for b in branches:
-                lines.append(f"- [{b['project']}/{b['repo']}: {b['branch']}]({b['url']})")
+            for n in c["notes"]:
+                header = " — ".join(x for x in [n.get("created_on"), n.get("subject")] if x)
+                lines.append(f"- {header or '(untitled note)'}")
+                if n.get("text"):
+                    lines.append("")
+                    lines.append(_sanitize_freetext_for_markdown(n["text"]))
+                if n.get("filename"):
+                    lines.append(f"  _(attachment: {n['filename']})_")
+                lines.append("")
+        if c.get("notes_truncated"):
+            lines.append("_Only the most recent notes are shown -- older ones were omitted._")
         lines.append("")
-        lines.append("**Pull requests:**")
-        if not pull_requests:
-            lines.append("_No matching pull requests found._")
+
+        lines.append("**Activity Timeline:**")
+        lines.append("")
+        if c.get("activities_error"):
+            lines.append(f"_Could not load the activity timeline: {c['activities_error']}_")
+        elif not c.get("activities"):
+            lines.append("_No activities recorded on this case._")
         else:
-            for pr in pull_requests:
-                lines.append(f"- [{pr['project']}/{pr['repo']} !{pr['id']}]({pr['url']}) — {pr.get('title')} ({pr.get('status')}, by {pr.get('created_by') or '—'})")
-        if prs_truncated:
-            lines.append("")
-            lines.append(f"_Only searched the {max_prs} most recent pull requests per project (--max-prs to widen) -- an older one could be missed._")
-    lines.append("")
-
-    lines.append("## Business Central — Open Tabs")
-    if not include_bc:
-        lines.append("_Skipped for this brief (pass --with-bc to include it)._")
-    elif not bc_results:
-        lines.append("_No Business Central tab found open._")
-    for bc_ in bc_results:
-        lines.append(f"### {bc_.get('page_title') or bc_.get('url')}")
-        lines.append(f"- **URL:** {bc_.get('url')}")
-        fields = bc_.get("fields") or []
-        if fields:
-            for f in fields:
-                lines.append(f"- **{f['label']}:** {f['value']}")
-        elif bc_.get("raw_text"):
-            lines.append("_No labeled fields matched — dumping visible page text instead (see lib/bc_scrape.py to improve the selector):_")
-            lines.append("")
-            lines.append("```")
-            lines.append(bc_["raw_text"])
-            lines.append("```")
-        else:
-            lines.append("_Nothing extracted from this page — check lib/bc_scrape.py._")
+            for a in c["activities"]:
+                header = " — ".join(x for x in [a.get("created_on"), a.get("type"), a.get("subject")] if x)
+                if a.get("status"):
+                    header += f" ({a['status']})"
+                lines.append(f"- {header or '(untitled activity)'}")
+                if a.get("description"):
+                    lines.append("")
+                    lines.append(_sanitize_freetext_for_markdown(a["description"]))
+                lines.append("")
+        if c.get("activities_truncated"):
+            lines.append("_Only the most recent activities are shown -- older ones were omitted._")
         lines.append("")
     lines.append("")
 
-    lines.append("## Useful Commands")
-    case_title = next((c.get("title") for c in crm_results if not c.get("error")), None)
-    branch_name = _branch_name(case_number, case_title)
-
-    # (project, repo) -> {clone_url, source}. Confirmed matches (a branch/PR
-    # already references this case) take priority over an auto-matched guess
-    # for the same repo, since setdefault only fills in what's missing.
-    repos = {}
-    for item in list(branches) + list(pull_requests):
-        if item.get("clone_url"):
-            repos.setdefault((item["project"], item["repo"]), {"clone_url": item["clone_url"], "source": "ado-search"})
-    for item in (suggested_repos or []):
-        key = (item["project"], item["repo"])
-        if key not in repos:
-            repos[key] = {"clone_url": item.get("clone_url"), "source": item.get("source", "guess")}
-
-    if not repos:
-        lines.append("_No repo identified yet. Once you know which one:_")
+    # Fallback for when no case was actually rendered above (no CRM tab
+    # open, or every crm_result errored) -- the section still needs to show
+    # up somewhere rather than silently vanishing.
+    if not ado_rendered:
+        lines.extend(ado_lines)
         lines.append("")
-        lines.append("```")
-        lines.append("git clone <repo-url>")
-        lines.append("cd <repo-folder>")
-        lines.append(f"git checkout -b {branch_name}")
-        lines.append("```")
-        lines.append("")
-        lines.append("_Tip: set `customer_repo_map` in config.json, or pass `--repo PROJECT/REPO`, "
-                      "to get this filled in automatically next time._")
-    else:
-        for (project, repo), info in repos.items():
-            lines.append(f"**{project}/{repo}:**" + (" _(guessed from customer name — verify before using)_" if info["source"] == "auto-match" else ""))
-            lines.append("")
-            lines.append("```")
-            if info.get("clone_url"):
-                lines.append(f"git clone {info['clone_url']}")
-            else:
-                lines.append(f"git clone <clone-url-for-{project}/{repo}>")
-            lines.append(f"cd {repo}")
-            lines.append(f"git checkout -b {branch_name}")
-            lines.append("```")
-            lines.append("")
-    lines.append("")
 
-    lines.append("## Next Steps")
-    lines.append("- [ ] Reproduce locally")
-    lines.append("- [ ] Identify root cause")
-    lines.append("- [ ] Implement fix")
-    lines.append("- [ ] Verify against case description")
-    lines.append("")
+    if leftover_by_case:
+        lines.append("## Other CRM Fields")
+        lines.append("_Every other populated CRM field not already surfaced above -- uncurated, for the rare case "
+                      "it has what you need._")
+        lines.append("")
+        multiple_cases = len(leftover_by_case) > 1
+        for c, leftover in leftover_by_case:
+            if multiple_cases:
+                lines.append(f"### {c.get('title') or c.get('ticket_number') or c.get('id')}")
+            for f in leftover:
+                lines.append(f"- **{f['label']}:** {_sanitize_freetext_for_markdown(str(f['value']))}")
+            lines.append("")
 
     return "\n".join(lines)
 
