@@ -31,6 +31,39 @@ class RunOneTests(unittest.TestCase):
             run.return_value.returncode = 3
             self.assertEqual(case.run_one("brief", []), 3)
 
+    def test_brief_demo_is_forwarded_untouched(self):
+        # brief has its own real --demo flag -- case.py must not touch it.
+        with mock.patch("case.subprocess.run") as run:
+            run.return_value.returncode = 0
+            case.run_one("brief", ["--demo"])
+        run.assert_called_once_with([sys.executable, str(case.SCRIPTS["brief"]), "--demo"])
+
+
+class ApplyDemoDefaultTests(unittest.TestCase):
+    def test_no_demo_flag_is_a_no_op(self):
+        self.assertEqual(case.apply_demo_default("guide", ["T1"]), ["T1"])
+
+    def test_brief_is_never_touched(self):
+        self.assertEqual(case.apply_demo_default("brief", ["--demo"]), ["--demo"])
+
+    def test_guide_demo_alone_defaults_the_case_number(self):
+        self.assertEqual(case.apply_demo_default("guide", ["--demo"]), [case.DEMO_CASE_NUMBER])
+
+    def test_guide_demo_with_other_flags_defaults_the_case_number(self):
+        self.assertEqual(
+            case.apply_demo_default("guide", ["--demo", "--no-open"]),
+            [case.DEMO_CASE_NUMBER, "--no-open"],
+        )
+
+    def test_explicit_case_number_wins_over_demo_default(self):
+        self.assertEqual(case.apply_demo_default("guide", ["T2611845", "--demo"]), ["T2611845"])
+
+    def test_solve_demo_also_defaults_the_case_number(self):
+        self.assertEqual(
+            case.apply_demo_default("solve", ["--demo", "--repo", "u"]),
+            [case.DEMO_CASE_NUMBER, "--repo", "u"],
+        )
+
 
 class MainDispatchTests(unittest.TestCase):
     def test_unknown_stage_is_an_error(self):

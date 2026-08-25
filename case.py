@@ -15,11 +15,25 @@ the chain (later stages need its output). Interactive prompts (case-solve's
 repo/confirm prompts if you skip --repo / --solve-arg=--yes) still work --
 stdin/stdout are inherited, not captured.
 
+`--demo` works for every stage, without a case number:
+  - brief has its own real --demo flag (fake CRM/ADO data) -- forwarded as-is.
+  - guide/solve have no such flag (guide always makes a real `claude` call,
+    solve always needs a real repo -- neither has a fake-data mode of its
+    own), so case.py strips --demo before forwarding and, if you didn't
+    already give a case number, fills in case 12345 -- the case case-brief's
+    own --demo run writes, checked into git (case-brief/case-briefs/case-
+    12345.md and case-guide's matching case-guides/case-12345-for-dummies.md)
+    so guide/solve have something real to run against with no CRM/ADO/repo
+    setup.
+
 Examples:
     python case.py brief T2611845
     python case.py guide T2611845 --model opus
     python case.py solve T2611845 --repo <url> --show-plan
     python case.py brief -h                              # forwarded --help
+
+    python case.py guide --demo                           # same as: guide 12345
+    python case.py solve --demo --repo <url>
 
     python case.py all T2611845 --repo <url>              # full chain
     python case.py all T2611845 --stop-after guide        # brief + guide only
@@ -34,9 +48,31 @@ HERE = Path(__file__).resolve().parent
 STAGES = ["brief", "guide", "solve"]
 SCRIPTS = {stage: HERE / f"case-{stage}" / f"case_{stage}.py" for stage in STAGES}
 
+# The case case-brief's own --demo run writes (case_brief.py's demo_data()
+# falls back to ticket_number "12345" when no case number is given) --
+# checked in at case-brief/case-briefs/case-12345.md and
+# case-guide/case-guides/case-12345-for-dummies.md so guide/solve, which have
+# no fake-data mode of their own, have something real to run --demo against.
+DEMO_CASE_NUMBER = "12345"
+DEMO_AWARE_STAGES = {"guide", "solve"}  # brief has its own real --demo flag
+
+
+def apply_demo_default(stage, argv):
+    """For stages with no --demo of their own: strip it, default the case number.
+
+    Only fills in DEMO_CASE_NUMBER when none was given -- if you passed a real
+    case number alongside --demo, that number wins and --demo is just dropped.
+    """
+    if stage not in DEMO_AWARE_STAGES or "--demo" not in argv:
+        return argv
+    argv = [a for a in argv if a != "--demo"]
+    has_case_number = bool(argv) and not argv[0].startswith("-")
+    return argv if has_case_number else [DEMO_CASE_NUMBER, *argv]
+
 
 def run_one(stage, argv):
-    """Forward argv as-is to one stage's script."""
+    """Forward argv to one stage's script (see apply_demo_default for the one exception)."""
+    argv = apply_demo_default(stage, argv)
     return subprocess.run([sys.executable, str(SCRIPTS[stage]), *argv]).returncode
 
 
