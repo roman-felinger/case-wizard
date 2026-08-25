@@ -40,7 +40,6 @@ def _args(**overrides):
     base = dict(
         case_number="T1",
         repo=None,
-        solves_dir=None,
         show_plan=False,
         no_implement=False,
         dry_run=False,
@@ -48,8 +47,6 @@ def _args(**overrides):
         skip_tests=False,
         skip_lint=False,
         skip_build=False,
-        guide_dir=None,
-        config=str(cs.CONFIG_PATH),
         no_open=False,
     )
     base.update(overrides)
@@ -65,28 +62,15 @@ class ApplyCliOverridesTests(unittest.TestCase):
         before = json.loads(json.dumps(cfg))  # deep copy via round-trip
         cs.apply_cli_overrides(cfg, _args())
         self.assertEqual(cfg, before)
-        self.assertNotIn("repo", cfg)  # never set unless --repo given
-
-    def test_repo_flag_sets_repo_key(self):
-        cfg = cs.load_config(Path("this-file-does-not-exist.json"))
-        cs.apply_cli_overrides(cfg, _args(repo="https://github.com/org/repo.git"))
-        self.assertEqual(cfg["repo"], "https://github.com/org/repo.git")
-
-    def test_guide_dir_and_solves_dir_flags(self):
-        cfg = cs.load_config(Path("this-file-does-not-exist.json"))
-        cs.apply_cli_overrides(cfg, _args(guide_dir="/g", solves_dir="/s"))
-        self.assertEqual(cfg["guide_dir"], "/g")
-        self.assertEqual(cfg["solves_dir"], "/s")
 
     def test_skip_flags_flip_the_corresponding_run_booleans_to_false(self):
         cfg = cs.load_config(Path("this-file-does-not-exist.json"))
         cs.apply_cli_overrides(
-            cfg, _args(skip_tests=True, skip_lint=True, skip_build=True, no_open=True)
+            cfg, _args(skip_tests=True, skip_lint=True, skip_build=True)
         )
         self.assertFalse(cfg["run_tests"])
         self.assertFalse(cfg["run_lint"])
         self.assertFalse(cfg["run_build"])
-        self.assertFalse(cfg["open_in_vscode"])
 
     def test_skip_flags_false_do_not_flip_booleans_back_to_true(self):
         # apply_cli_overrides only ever sets False when the skip flag is
@@ -149,12 +133,13 @@ class ConfigMergePrecedenceTests(unittest.TestCase):
         self.assertFalse(cfg["run_build"])  # config.json value, not the True default
 
     def test_full_chain_default_then_config_then_cli(self):
-        # guide_dir: default -> config.json overrides -> CLI overrides again.
-        self._write_config({"guide_dir": "/from-config"})
+        # run_build: default True -> config.json also sets it True (explicit,
+        # not just the untouched default) -> --skip-build still wins.
+        self._write_config({"run_build": True})
         cfg = cs.load_config(self.config_path)
-        self.assertEqual(cfg["guide_dir"], "/from-config")
-        cs.apply_cli_overrides(cfg, _args(guide_dir="/from-cli"))
-        self.assertEqual(cfg["guide_dir"], "/from-cli")  # CLI wins here
+        self.assertTrue(cfg["run_build"])
+        cs.apply_cli_overrides(cfg, _args(skip_build=True))
+        self.assertFalse(cfg["run_build"])  # CLI wins here
 
 
 class ExtractRepoSuggestionTests(unittest.TestCase):

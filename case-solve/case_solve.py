@@ -9,7 +9,7 @@ Workflow: case-brief → case-guide → case-solve
 
 Each run:
   - Reads the guide already written by case-guide
-  - Prompts for repo URL (suggests from guide/config, but you can override)
+  - Prompts for repo URL (suggests one parsed from the guide, but you can override)
   - Clones repo (or uses cached clone) and creates a case-specific branch
   - Installs dependencies (pip, npm, dotnet, cargo as detected)
   - Uses Claude to guide implementation step-by-step, applying changes
@@ -53,9 +53,6 @@ SOLVES_DIR = HERE / "case-solves"
 
 # Default configuration
 DEFAULTS = {
-    "guide_dir": str(GUIDE_DIR),
-    "solves_dir": str(SOLVES_DIR),
-    "open_in_vscode": True,
     "run_tests": True,
     "run_lint": True,
     "run_build": True,
@@ -63,7 +60,6 @@ DEFAULTS = {
         "model": None,
         "agent": "case-solver",
         "timeout": 900,  # 15 minutes for implementation
-        "extra_args": [],
     },
 }
 
@@ -81,14 +77,6 @@ def load_config(path=None):
 
 def apply_cli_overrides(cfg, args):
     """Apply CLI flag overrides to config."""
-    if args.repo:
-        cfg["repo"] = args.repo
-    if args.guide_dir:
-        cfg["guide_dir"] = args.guide_dir
-    if args.solves_dir:
-        cfg["solves_dir"] = args.solves_dir
-    if args.no_open:
-        cfg["open_in_vscode"] = False
     if args.skip_tests:
         cfg["run_tests"] = False
     if args.skip_lint:
@@ -230,12 +218,6 @@ def build_parser():
         metavar="URL",
         help="Git clone URL (suggests from guide if not provided)",
     )
-    repo.add_argument(
-        "--solves-dir",
-        metavar="PATH",
-        help="Directory to store cloned repos and work (default: ./case-solves)",
-    )
-
     # Modes
     modes = parser.add_argument_group("modes")
     modes.add_argument(
@@ -256,11 +238,8 @@ def build_parser():
     modes.add_argument(
         "--yes",
         action="store_true",
-        help=(
-            "Skip the interactive yes/no confirmation before making changes "
-            "(for non-interactive callers, e.g. case-wizard's UI, which "
-            "confirms repo/branch itself before running this)"
-        ),
+        help="Skip the interactive yes/no confirmation before making changes "
+             "(for scripted/non-interactive callers)",
     )
 
     # Verification
@@ -284,17 +263,6 @@ def build_parser():
     # Misc
     misc = parser.add_argument_group("misc")
     misc.add_argument(
-        "--guide-dir",
-        metavar="PATH",
-        help="Where case-guide writes guides (default: ../case-guide/case-guides)",
-    )
-    misc.add_argument(
-        "--config",
-        metavar="PATH",
-        default=str(CONFIG_PATH),
-        help=f"Config file (default: {CONFIG_PATH})",
-    )
-    misc.add_argument(
         "--no-open",
         action="store_true",
         help="Don't open result in VS Code",
@@ -305,7 +273,7 @@ def build_parser():
 
 def main():
     args = build_parser().parse_args()
-    cfg = load_config(Path(args.config) if args.config else None)
+    cfg = load_config()
     apply_cli_overrides(cfg, args)
 
     # Validate claude is installed
@@ -316,7 +284,7 @@ def main():
         )
 
     # Find and read guide
-    guide_path = find_guide(args.case_number, cfg["guide_dir"])
+    guide_path = find_guide(args.case_number, GUIDE_DIR)
     guide_text = read_guide(guide_path)
     print(f"✓ Found guide: {guide_path}")
 
@@ -355,7 +323,7 @@ def main():
     workspace_mgr = WorkspaceManager(
         case_number=args.case_number,
         repo_url=repo_url,
-        solves_dir=Path(cfg["solves_dir"]),
+        solves_dir=SOLVES_DIR,
     )
     workspace = workspace_mgr.setup()
     print(f"✓ Workspace ready: {workspace.repo_dir}")
@@ -412,7 +380,7 @@ def main():
     report_path = report_gen.generate(workspace.case_dir / "VERIFICATION_CHECKLIST.md")
     print(f"\n✓ Report generated: {report_path}")
 
-    if cfg["open_in_vscode"] and not args.dry_run:
+    if not args.no_open and not args.dry_run:
         open_in_editor(report_path)
 
     print("\n" + "=" * 70)

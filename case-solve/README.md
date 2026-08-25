@@ -24,8 +24,8 @@ python case_solve.py -h                                   # all options
 
 Omit `--repo` in a real terminal and it prompts, suggesting a URL found in the guide
 if there is one. `--yes` skips both the repo prompt and the confirmation prompt —
-required for any non-interactive caller (e.g. case-wizard's own app), since there's
-no terminal there to answer either one.
+required for any scripted/non-interactive caller, since there's no terminal there to
+answer either one.
 
 Requires:
 - A guide already written by `case-guide` (reads
@@ -76,8 +76,11 @@ A project using different tools won't get auto-verified — check it manually in
 
 ## Config
 
-Edit `config.json` (optional, see `config.example.json`) or use CLI flags — flags
-always win. Nothing requires editing the config file.
+Edit `config.json` (optional, see `config.example.json`) for `run_tests`/`run_lint`/
+`run_build`/`claude.*` — the `--skip-tests`/`--skip-lint`/`--skip-build` CLI flags win
+over config.json for those three. `claude.model`/`agent`/`timeout` are config-only,
+no CLI flag. Where guides/clones live is fixed (`case_solve.py`'s `GUIDE_DIR`/
+`SOLVES_DIR`), not configurable.
 
 ## Troubleshooting
 

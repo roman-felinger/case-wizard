@@ -90,10 +90,14 @@ Each case gets its own branch in the same repo. This:
 Same pattern as case-brief/case-guide:
 1. **DEFAULTS** dict in case_solve.py (built-in)
 2. **config.json** (if exists, deep-merged)
-3. **CLI flags** (override everything)
+3. **CLI flags** (override everything, for `run_tests`/`run_lint`/`run_build` only)
 
-Every setting is reachable via either config.json or a flag; no setting requires editing
-the config file.
+`guide_dir`/`solves_dir` (fixed to `GUIDE_DIR`/`SOLVES_DIR`), `open_in_vscode` (always
+on, `--no-open` overrides), and `claude.extra_args` (never had a CLI flag, never used)
+were removed as config keys -- fixed/always-on/gone respectively, since none of them
+had ever actually been changed from their default. `claude.model`/`agent`/`timeout`
+stay config-only with no CLI flag, unlike case-guide's equivalents -- not worth adding
+flags nobody's asked for.
 
 ## Testing Approach
 

@@ -237,7 +237,6 @@ Generate the exact steps now, one file at a time:
             model_arg = ["--model", self.cfg["claude"]["model"]]
 
         cmd = ["claude", "-p"] + model_arg + agent_arg
-        cmd.extend(self.cfg["claude"]["extra_args"])
 
         try:
             result = subprocess.run(

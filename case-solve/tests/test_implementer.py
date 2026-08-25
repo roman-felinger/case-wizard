@@ -39,13 +39,12 @@ def _workspace(repo_dir):
     return mock.Mock(repo_dir=Path(repo_dir))
 
 
-def _cfg(agent="case-solver", model=None, timeout=900, extra_args=None):
+def _cfg(agent="case-solver", model=None, timeout=900):
     return {
         "claude": {
             "agent": agent,
             "model": model,
             "timeout": timeout,
-            "extra_args": extra_args or [],
         }
     }
 
@@ -148,20 +147,6 @@ class CallClaudeTests(unittest.TestCase):
         self.assertNotIn("--agent", cmd)
         self.assertNotIn("--model", cmd)
 
-    def test_appends_extra_args(self):
-        impl = Implementer(
-            workspace=_workspace("/repo"),
-            guide_text="g",
-            case_number="T1",
-            cfg=_cfg(extra_args=["--verbose", "--foo=bar"]),
-        )
-        with mock.patch(
-            "lib.implementer.subprocess.run", return_value=_completed()
-        ) as run:
-            impl._call_claude("prompt")
-        cmd = run.call_args[0][0]
-        self.assertIn("--verbose", cmd)
-        self.assertIn("--foo=bar", cmd)
 
     def test_prompt_is_passed_via_stdin_not_argv(self):
         with mock.patch(
