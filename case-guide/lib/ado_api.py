@@ -19,11 +19,14 @@ independent per-repo/per-branch/per-PR fetches inside find_related and
 gather_ado_detail (case_guide.py) run through a small thread pool rather
 than one at a time, since they don't depend on each other.
 """
-import base64
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from shared.ado_auth import auth_header as _auth_header, get_pat as _get_pat_by_env
 
 DEFAULT_MAX_PRS = 50
 MAX_PROJECTS = 50
@@ -36,19 +39,8 @@ class AdoAuthError(RuntimeError):
     under-scoped PAT as "this really has no matching branches/PRs"."""
 
 
-def _auth_header(pat):
-    token = base64.b64encode(f":{pat}".encode()).decode()
-    return {"Authorization": f"Basic {token}", "Content-Type": "application/json"}
-
-
 def _get_pat(cfg):
-    pat = os.environ.get(cfg["pat_env_var"])
-    if not pat:
-        raise RuntimeError(
-            f"Azure DevOps PAT not found. Set env var {cfg['pat_env_var']} "
-            "(create one at https://dev.azure.com/{org}/_usersSettings/tokens)."
-        )
-    return pat
+    return _get_pat_by_env(cfg["pat_env_var"])
 
 
 def open_session(cfg):

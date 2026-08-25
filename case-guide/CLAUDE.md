@@ -5,8 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+..\.venv\Scripts\Activate.ps1   # from case-guide/, on Windows -- repo root's venv has everything
 
 python case_guide.py T2611845 --show-prompt   # assemble the prompt and print it -- no claude call, no ADO query cost
 python case_guide.py T2611845 --skip-ado      # brief content only, skip the live ADO re-query
@@ -38,12 +37,17 @@ live Azure DevOps org.
 
 ## Architecture
 
-Independent from case-brief — **no shared imports**, only a filesystem contract: this
-reads the Markdown file `case_brief.py` already wrote. `lib/ado_api.py` here is a
-deliberate standalone copy of case-brief's own module, not an import — see TODO.md's
-"Consider whether ... duplication is worth it" entry before changing that; a fix to
-case-brief's `find_related`/pagination/error-handling does not automatically reach
-this copy and vice versa. `lib/repo_suggest.py` is the same story, one level newer:
+Independent from case-brief at the business-logic level — reading the case's data is
+a filesystem contract (this reads the Markdown file `case_brief.py` already wrote),
+and `lib/ado_api.py` here is a deliberate standalone copy of case-brief's own module
+for its search/query logic, not an import (see TODO.md's resolved "duplication" entry
+for what's shared vs. not); a fix to case-brief's `find_related`/pagination/
+error-handling does not automatically reach this copy and vice versa. What both
+copies' PAT-auth-header construction *does* share is the repo-root `shared/` package
+(`shared/ado_auth.py`, also used by case-brief and `app/azdo_check.py`) — that piece
+is pure, stable, and was byte-for-byte identical across all three before being
+extracted, unlike the search logic above. `lib/repo_suggest.py` is the same
+independent-copy story as `ado_api.py`'s search logic, one level newer:
 case-brief used to own repo-suggestion (guess/render a clone-able repo + branch name)
 and render it as its own "Useful Commands" brief section; that moved here (see
 case-brief/CLAUDE.md) since this project is the one that actually needs it for the

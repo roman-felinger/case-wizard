@@ -51,17 +51,15 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-# This script prints Unicode (em-dash, etc.). Windows' default
-# console/subprocess-pipe encoding is the system ANSI codepage (e.g.
-# cp1250), not UTF-8, which crashes on those characters whether run
-# directly in a terminal or piped from case-wizard's subprocess call.
-if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+from shared.console import enable_utf8_console
+
+enable_utf8_console()  # this script prints Unicode; see shared/console.py
+
 from lib import ado_api, repo_suggest, writer
+from shared.config import deep_merge, strip_comments
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
@@ -93,35 +91,12 @@ DEFAULTS = {
 }
 
 
-def _deep_merge(base, override):
-    for key, value in override.items():
-        if isinstance(value, dict) and isinstance(base.get(key), dict):
-            _deep_merge(base[key], value)
-        else:
-            base[key] = value
-    return base
-
-
-def _strip_comments(cfg):
-    """config.example.json documents settings with leading-underscore keys
-    (e.g. "_comment") at the top level and inside its known nested blocks --
-    drop any of those after merging so they don't ride along inside the
-    dicts handed to ado_api.* (which don't expect them, and would leak them
-    into anything that ever logs/serializes those dicts verbatim). DEFAULTS
-    only ever nests one level deep, so there's no need for a general
-    recursive walk here."""
-    for d in (cfg, cfg.get("azure_devops", {}), cfg.get("claude", {})):
-        for key in [k for k in d if isinstance(k, str) and k.startswith("_")]:
-            del d[key]
-    return cfg
-
-
 def load_config(path=CONFIG_PATH):
     cfg = copy.deepcopy(DEFAULTS)
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
-            _deep_merge(cfg, json.load(f))
-    return _strip_comments(cfg)
+            deep_merge(cfg, json.load(f))
+    return strip_comments(cfg)
 
 
 def _sanitize_case_number(case_number):

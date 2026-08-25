@@ -4,9 +4,10 @@ Turns a case brief into a step-by-step implementation guide using Claude.
 
 ## Setup
 
+Use the repo root's `.venv` — it already has everything all three stages need:
+
 ```bash
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+..\.venv\Scripts\Activate.ps1      # from case-guide/, on Windows
 ```
 
 ## Usage

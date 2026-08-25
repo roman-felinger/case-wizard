@@ -42,14 +42,14 @@ class GuideFilenameTests(unittest.TestCase):
 
 class OpenEditorTests(unittest.TestCase):
     def test_does_nothing_when_code_is_not_on_path(self):
-        with mock.patch.object(writer.shutil, "which", return_value=None), \
-             mock.patch.object(writer.subprocess, "run") as run:
+        with mock.patch("shared.editor.shutil.which", return_value=None), \
+             mock.patch("shared.editor.subprocess.run") as run:
             writer.open_editor("some/path.md")
         run.assert_not_called()
 
     def test_launches_code_when_it_is_on_path(self):
-        with mock.patch.object(writer.shutil, "which", return_value="C:\\code.cmd"), \
-             mock.patch.object(writer.subprocess, "run") as run:
+        with mock.patch("shared.editor.shutil.which", return_value="C:\\code.cmd"), \
+             mock.patch("shared.editor.subprocess.run") as run:
             writer.open_editor("some/path.md")
         run.assert_called_once_with(["C:\\code.cmd", "some/path.md"], check=False)
 

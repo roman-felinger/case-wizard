@@ -17,6 +17,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import case_guide as cg
+from shared import config as shared_config
 
 
 class SanitizeCaseNumberTests(unittest.TestCase):
@@ -114,7 +115,7 @@ class StripCommentsTests(unittest.TestCase):
             "azure_devops": {"_comment": "x", "_other_meta": "y", "org_url": None},
             "claude": {"_comment": "z"},
         }
-        cleaned = cg._strip_comments(cfg)
+        cleaned = shared_config.strip_comments(cfg)
         self.assertNotIn("_comment", cleaned)
         self.assertNotIn("_comment", cleaned["azure_devops"])
         self.assertNotIn("_other_meta", cleaned["azure_devops"])

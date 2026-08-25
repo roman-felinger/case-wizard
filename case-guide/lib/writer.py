@@ -1,20 +1,10 @@
-"""Writes the generated guide to disk and optionally opens it in VS Code --
-same small convention case-brief's lib/report.py uses, kept as its own tiny
-copy here since this project is deliberately independent of case-brief's code."""
+"""Writes the generated guide to disk and optionally opens it in VS Code."""
 import os
-import re
-import shutil
-import subprocess
+import sys
 
-# The one rule for "safe to use as a filesystem path component" this
-# project relies on -- shared with case_guide.py's _sanitize_case_number
-# so the same character class can't drift out of sync between the input
-# side (reading a brief) and the output side (writing a guide).
-UNSAFE_CHARS = re.compile(r"[^\w.-]+")
-
-
-def _safe_name(text):
-    return UNSAFE_CHARS.sub("_", str(text)).strip("_") or "unlabeled"
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from shared.editor import open_in_editor as open_editor
+from shared.safe_name import UNSAFE_CHARS, safe_name as _safe_name
 
 
 def guide_filename(filename_stem):
@@ -23,18 +13,6 @@ def guide_filename(filename_stem):
     already exists (e.g. for skip-if-unchanged) before doing the work to
     regenerate one."""
     return f"{_safe_name(filename_stem)}.md"
-
-
-def open_editor(path):
-    """Open path in VS Code if it's on PATH -- silently does nothing
-    otherwise. Split out from write_and_open so a caller that decides not
-    to regenerate an already-up-to-date guide can still open it."""
-    # shutil.which resolves the real executable (following PATHEXT, so
-    # this finds VS Code's code.cmd shim on Windows too) -- avoids needing
-    # shell=True just to get PATHEXT resolution.
-    code_exe = shutil.which("code")
-    if code_exe:
-        subprocess.run([code_exe, path], check=False)
 
 
 def write_and_open(text, output_dir, filename_stem, open_in_vscode=True):
