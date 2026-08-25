@@ -28,6 +28,8 @@ import requests
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from shared.ado_auth import auth_header as _auth_header, get_pat as _get_pat_by_env
 
+# The PAT env var name never actually varies -- not worth a config setting.
+PAT_ENV_VAR = "AZDO_PAT"
 DEFAULT_MAX_PRS = 50
 MAX_PROJECTS = 50
 MAX_WORKERS = 8
@@ -39,16 +41,12 @@ class AdoAuthError(RuntimeError):
     under-scoped PAT as "this really has no matching branches/PRs"."""
 
 
-def _get_pat(cfg):
-    return _get_pat_by_env(cfg["pat_env_var"])
-
-
-def open_session(cfg):
+def open_session():
     """One requests.Session with the auth header set once -- pass this into
     every call in a run instead of letting each one build its own header
     and open its own connection."""
     session = requests.Session()
-    session.headers.update(_auth_header(_get_pat(cfg)))
+    session.headers.update(_auth_header(_get_pat_by_env(PAT_ENV_VAR)))
     return session
 
 
@@ -88,7 +86,7 @@ def list_projects(cfg, session=None):
     """(project_names, truncated) -- truncated is True if the org has more
     than MAX_PROJECTS projects, since $top caps what comes back with no
     other signal that anything was left out."""
-    session = session or open_session(cfg)
+    session = session or open_session()
     org_url = cfg["org_url"].rstrip("/")
     data = _get_json(f"{org_url}/_apis/projects?api-version=7.1&$top={MAX_PROJECTS}", session)
     names = [p["name"] for p in data.get("value", [])]
@@ -105,7 +103,7 @@ def _resolve_projects(cfg, session):
 
 
 def list_repos(cfg, project, session=None):
-    session = session or open_session(cfg)
+    session = session or open_session()
     org_url = cfg["org_url"].rstrip("/")
     data = _get_json(f"{org_url}/{project}/_apis/git/repositories?api-version=7.1", session)
     return data.get("value", [])
@@ -114,8 +112,8 @@ def list_repos(cfg, project, session=None):
 def get_repo(cfg, project, repo_name, session=None):
     """A single named repo's info (including its clone URL), or None if it
     doesn't exist / isn't visible with this PAT -- used by
-    lib/repo_suggest.py to resolve a clone URL for a customer-name guess or
-    a customer_repo_map/--repo override, same as case-brief's own get_repo."""
+    lib/repo_suggest.py to resolve a clone URL for a customer-name guess,
+    same as case-brief's own get_repo."""
     for repo in list_repos(cfg, project, session=session):
         if repo["name"].lower() == repo_name.lower():
             return repo
@@ -158,9 +156,9 @@ def find_related(cfg, case_number, session=None):
     that progress output stays in a sane order); the repos within each
     project are fetched concurrently, since they don't depend on each other.
     """
-    session = session or open_session(cfg)
+    session = session or open_session()
     org_url = cfg["org_url"].rstrip("/")
-    max_prs = cfg.get("max_prs", DEFAULT_MAX_PRS)
+    max_prs = DEFAULT_MAX_PRS
     needle = case_number.lower()
     projects, projects_truncated = _resolve_projects(cfg, session)
     total = len(projects)
@@ -241,7 +239,7 @@ def get_recent_prs(cfg, project, exclude_ids=(), top=5, session=None):
     still leaves `top` PRs behind where possible; best-effort only, not
     guaranteed to backfill if several of the top hits are excluded.
     """
-    session = session or open_session(cfg)
+    session = session or open_session()
     org_url = cfg["org_url"].rstrip("/")
     fetch_top = top + len(exclude_ids)
     url = (
@@ -271,7 +269,7 @@ def get_recent_prs(cfg, project, exclude_ids=(), top=5, session=None):
 def get_branch_commits(cfg, project, repo_name, branch_name, max_commits=15, session=None):
     """Recent commit messages on a branch -- find_related only gives the
     branch name, not what's actually in it."""
-    session = session or open_session(cfg)
+    session = session or open_session()
     org_url = cfg["org_url"].rstrip("/")
     url = (
         f"{org_url}/{project}/_apis/git/repositories/{requests.utils.quote(repo_name, safe='')}/commits"
@@ -294,7 +292,7 @@ def get_pr_details(cfg, project, repo_name, pr_id, max_commits=20, max_files=40,
     aborting the whole lookup. An AdoAuthError still propagates, though --
     see _get_or.
     """
-    session = session or open_session(cfg)
+    session = session or open_session()
     org_url = cfg["org_url"].rstrip("/")
     repo = requests.utils.quote(repo_name, safe="")
     base = f"{org_url}/{project}/_apis/git/repositories/{repo}/pullrequests/{pr_id}"

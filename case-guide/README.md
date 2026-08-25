@@ -14,11 +14,8 @@ Use the repo root's `.venv` — it already has everything all three stages need:
 
 ```bash
 python case_guide.py T2611845
-python case_guide.py T2611845 --skip-ado        # brief only, no live ADO
-python case_guide.py T2611845 --show-prompt     # preview prompt, no call
 python case_guide.py T2611845 --model opus      # use a different model
 python case_guide.py T2611845 --no-open         # don't open in VS Code
-python case_guide.py T2611845 --repo MyProject/my-repo   # override the suggested repo
 python case_guide.py -h                         # all options
 ```
 
@@ -32,10 +29,12 @@ Output: `case-guides/case-<code>-for-dummies.md`
 ## Config
 
 Edit `config.json` (optional) or use CLI flags. See `config.example.json`.
+Which repo to suggest for the guide's "Get set up" step is auto-guessed by
+fuzzy-matching the CRM customer name against Azure DevOps project/repo names
+-- there's no manual override.
 
 ## Testing
 
 ```bash
-python -m unittest discover -s tests -v   # 94 tests, mocked, no network
-python case_guide.py T2611845 --show-prompt   # assembles the real prompt, no claude call
+python -m unittest discover -s tests -v   # 87 tests, mocked, no network
 ```

@@ -6,30 +6,15 @@ that owns it now; case-brief's brief is just the facts.
 
 Deliberately a standalone copy of the same logic, not an import -- same
 "no shared imports" policy as lib/ado_api.py/lib/writer.py (see CLAUDE.md).
-The one real difference from case-brief's old version: that one read
-customer/repo-override straight off crm_results/argparse Namespace objects
-it already had in hand; this one takes them as plain arguments, since this
-project's only source of case data is the already-rendered brief Markdown
-(see case_guide.py's _extract_customer/_extract_case_title).
+Fuzzy-matches the CRM customer name against ADO project (then repo) names --
+there's no manual override; a confirmed hit from this run's own Azure DevOps
+search always takes priority over a guess (see merge_confirmed_and_guessed).
+Customer name comes from the already-rendered brief Markdown (see
+case_guide.py's _extract_customer).
 """
 import re
 import sys
 from difflib import SequenceMatcher
-
-
-def find_customer_repo(customer_repo_map, customer_name):
-    """Looks up customer_repo_map (config.json's list of {customer_contains,
-    project, repo} rules) for one whose customer_contains matches
-    (case-insensitive substring) the case's customer name. Returns the
-    matching rule dict or None."""
-    if not customer_name:
-        return None
-    haystack = customer_name.lower()
-    for rule in customer_repo_map or []:
-        needle = rule.get("customer_contains", "").lower()
-        if needle and needle in haystack:
-            return rule
-    return None
 
 
 _CORP_SUFFIXES = re.compile(
@@ -74,13 +59,14 @@ def branch_name(case_number, title):
     return f"{case_part}-{slug}" if slug else case_part
 
 
-def resolve_suggested_repos(ado_api, azure_cfg, customer_repo_map, repo_override, customer):
-    """Figures out which repo(s) to suggest clone/branch commands for.
-
-    Priority: repo_override (--repo) > customer_repo_map entry > auto-matching
-    the CRM customer name against ADO project (then repo) names by fuzzy
-    string similarity. Auto-match results are tagged so the guide can flag
-    them as a guess rather than a confirmed mapping.
+def resolve_suggested_repos(ado_api, azure_cfg, customer):
+    """Figures out which repo(s) to suggest clone/branch commands for, by
+    fuzzy-matching the CRM customer name against ADO project (then repo)
+    names. Auto-match results are tagged so the guide can flag them as a
+    guess rather than a confirmed mapping -- there is no manual override;
+    a confirmed hit from this run's own Azure DevOps search still takes
+    priority over a guess for the same repo (see
+    merge_confirmed_and_guessed).
 
     `ado_api` is passed in (rather than imported) so tests can hand this a
     fake without monkeypatching a module-level import.
@@ -90,35 +76,7 @@ def resolve_suggested_repos(ado_api, azure_cfg, customer_repo_map, repo_override
     none stands out as THE one).
     """
     org_url = azure_cfg.get("org_url")
-
-    def resolve_one(project, repo_name, source):
-        if not org_url:
-            return [{"project": project, "repo": repo_name, "clone_url": None, "source": source}]
-        try:
-            repo_info = ado_api.get_repo(azure_cfg, project, repo_name)
-        except Exception as e:
-            print(f"  Could not resolve repo {project}/{repo_name}: {e}", file=sys.stderr)
-            return [{"project": project, "repo": repo_name, "clone_url": None, "source": source}]
-        if not repo_info:
-            print(f"  Repo {project}/{repo_name} not found (check customer_repo_map / --repo)", file=sys.stderr)
-            return [{"project": project, "repo": repo_name, "clone_url": None, "source": source}]
-        return [{"project": project, "repo": repo_info["name"], "clone_url": repo_info.get("remoteUrl"), "source": source}]
-
-    if repo_override:
-        if "/" not in repo_override:
-            print(f"  --repo should be PROJECT/REPO, got {repo_override!r} -- ignoring", file=sys.stderr)
-        else:
-            project, repo_name = repo_override.split("/", 1)
-            return resolve_one(project, repo_name, "cli")
-
-    if not customer:
-        return []
-
-    rule = find_customer_repo(customer_repo_map, customer)
-    if rule:
-        return resolve_one(rule.get("project"), rule.get("repo"), "customer_repo_map")
-
-    if not org_url:
+    if not customer or not org_url:
         return []
 
     try:
@@ -131,8 +89,7 @@ def resolve_suggested_repos(ado_api, azure_cfg, customer_repo_map, repo_override
     if not match:
         return []
     project, score = match
-    print(f"  Guessed ADO project '{project}' from customer '{customer}' (similarity {score:.2f}) -- "
-          f"override with --repo or customer_repo_map if wrong.")
+    print(f"  Guessed ADO project '{project}' from customer '{customer}' (similarity {score:.2f}).")
 
     try:
         repos = ado_api.list_repos(azure_cfg, project)
@@ -184,9 +141,7 @@ def format_suggested_repo(repos, branch):
             "git clone <repo-url>\n"
             "cd <repo-folder>\n"
             f"git checkout -b {branch}\n"
-            "```\n\n"
-            "_Tip: set `customer_repo_map` in config.json, or pass `--repo PROJECT/REPO`, "
-            "to get this filled in automatically next time._"
+            "```"
         )
     lines = []
     for (project, repo), info in repos.items():

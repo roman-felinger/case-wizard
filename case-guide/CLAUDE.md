@@ -7,20 +7,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 ..\.venv\Scripts\Activate.ps1   # from case-guide/, on Windows -- repo root's venv has everything
 
-python case_guide.py T2611845 --show-prompt   # assemble the prompt and print it -- no claude call, no ADO query cost
-python case_guide.py T2611845 --skip-ado      # brief content only, skip the live ADO re-query
 python case_guide.py T2611845                 # full run: needs a brief already written by case-brief, and the claude CLI on PATH
-python case_guide.py T2611845 --force         # regenerate even if the guide is already newer than the brief
-python case_guide.py T2611845 --repo MyProject/my-repo   # override the suggested repo (see "Repo suggestion" below)
+python case_guide.py T2611845 --model opus    # use a different model for this run
 python case_guide.py -h                       # full flag list
 ```
 
 Requires a brief already at `../case-brief/case-briefs/case-<code>.md` (run
 case-brief's `case_brief.py <code>` first) and the `claude` CLI installed + logged in
-for any run that doesn't use `--show-prompt`.
+-- every run calls `claude`, there's no dry/preview mode.
 
 ```
-python -m unittest discover -s tests -v   # from case-guide/ -- 94 tests, mocked, no network
+python -m unittest discover -s tests -v   # from case-guide/ -- 87 tests, mocked, no network
 python -m pytest tests                    # equivalent, if pytest is installed
 ```
 
@@ -31,9 +28,8 @@ raise-vs-swallow auth-error policy and silent-truncation warnings (mocked), and
 `lib/repo_suggest.py`'s fuzzy-match ambiguity guard and confirmed-beats-guessed merge
 (`tests/test_repo_suggest.py`, plus `_extract_customer`/`_extract_case_title`'s
 brief-parsing in `tests/test_case_guide.py`). Low-risk rendering/formatting branches
-are skipped in favor of `--show-prompt` (eyeball the real output) rather than testing
-every branch. What no test here can cover (see TODO.md): a real `claude` call and a
-live Azure DevOps org.
+are skipped rather than testing every one. What no test here can cover (see
+TODO.md): a real `claude` call and a live Azure DevOps org.
 
 ## Architecture
 
@@ -55,8 +51,8 @@ guide's "Get set up" step, and case-brief's brief is meant to be just the facts.
 
 **Repo suggestion (`lib/repo_suggest.py::resolve_suggested_repos`)** decides which
 repo(s)/branch to suggest, even when Azure DevOps found zero matching branches/PRs
-yet (the common case for a brand-new case). Priority order: `--repo` flag →
-`customer_repo_map` entry in config.json → fuzzy-match the case's customer name
+yet (the common case for a brand-new case). There's no manual override (no `--repo`
+flag, no `customer_repo_map`) — it's purely a fuzzy-match of the case's customer name
 against ADO project names, then repo names, via `difflib.SequenceMatcher`
 (`best_fuzzy_match` requires the top match to both clear a threshold *and* beat the
 runner-up by a margin — an ambiguous guess is treated as no guess, since it would
@@ -69,9 +65,7 @@ missing customer renders as report.py's `—` placeholder, which `_extract_custo
 treats as "no customer" rather than a literal name to fuzzy-match against.
 `gather_suggested_repo` merges this guess with any confirmed match from this run's
 own live Azure DevOps search (`lib/repo_suggest.py::merge_confirmed_and_guessed`,
-same "confirmed beats guessed" priority case-brief's report.py used to apply) and is
-skipped outright under `--skip-ado`, same as `gather_style_prs`, rather than partially
-using Azure DevOps when the rest of the run explicitly opted out of it.
+same "confirmed beats guessed" priority case-brief's report.py used to apply).
 `lib/repo_suggest.py::format_suggested_repo` renders the result as its own prompt
 section (`--- SUGGESTED REPO/BRANCH ---`) rather than a finished "Get set up" heading
 — `claude` still writes that section's actual prose from it.
@@ -88,32 +82,35 @@ independently of `case_guide.py`; its Markdown body is the actual system prompt.
    `writer.UNSAFE_CHARS` (same character allowlist as the output-filename sanitizer)
    specifically to close off path-traversal via a malicious/mistyped case code before
    it reaches a filesystem path or glob pattern.
-2. Unless `--skip-ado`, `gather_ado_detail` re-runs the same branch/PR search
-   case-brief does, then fetches one level deeper per hit — commit messages, changed
-   files, review comments — via `_enrich_branch`/`_enrich_pr` run concurrently through
-   a `ThreadPoolExecutor` (`ado_api.MAX_WORKERS`), sharing one `requests.Session` with
+2. `gather_ado_detail` re-runs the same branch/PR search case-brief does, then
+   fetches one level deeper per hit — commit messages, changed files, review
+   comments — via `_enrich_branch`/`_enrich_pr` run concurrently through a
+   `ThreadPoolExecutor` (`ado_api.MAX_WORKERS`), sharing one `requests.Session` with
    the initial search. `ado_api.AdoAuthError` (401/403) is deliberately NOT swallowed
    like other request failures — an expired/under-scoped PAT is treated as a hard
    error rather than silently reported as "no related work found", since the two are
-   very different claims to make to someone picking up a case.
+   very different claims to make to someone picking up a case. If `azure_devops.org_url`
+   isn't configured, this just yields that as the error -- there's no skip flag.
 3. `format_ado_detail` renders that into Markdown, folding any partial-search warnings
    (capped PR listing, a branch whose commit fetch failed, etc.) into a visible "this
    search may be incomplete" note rather than presenting a partial result as complete.
-4. `_truncate` caps the assembled ADO-detail text at `claude.max_ado_detail_chars`
+4. `_truncate` caps the assembled ADO-detail text at the fixed `MAX_ADO_DETAIL_CHARS`
    (visibly, with an omitted-character count) before it goes into the prompt — a case
    with heavy branch/PR activity has no other size bound on what gets inlined. Same
-   helper (with a different `label`/`config_key`) caps the house-style example below.
+   helper (with a different `label`/limit) caps the house-style example below at
+   `MAX_EXAMPLE_CHARS`. Both are fixed constants, not configurable -- no CLI flag ever
+   existed for either.
 5. Two more context sources feed the same prompt, both skippable and both following
    the same "explain why it's empty rather than silently omitting" policy as step 3:
    `find_example_guide` picks the most recently written other guide in `output_dir`
    (`--no-example` / `claude.example_count=0` disables) as a tone/structure anchor —
    `format_example_guide` is explicit it's not to be treated as source material.
    `gather_style_prs` → `ado_api.get_recent_prs` samples the target project's other
-   recent completed PRs (`_pick_style_project` picks the project: configured, or the
-   case's own single matched project, else skipped with a reason) so the guide can
-   ground branch/reviewer/naming advice in this team's actual conventions instead of
-   generic guesses (`--no-style-prs` / `azure_devops.style_pr_sample=0` disables;
-   implied by `--skip-ado`, which never opens an ADO session at all).
+   recent completed PRs, always 5 unless `--no-style-prs` disables it
+   (`_pick_style_project` picks the project: configured, or the case's own single
+   matched project, else skipped with a reason) so the guide can ground
+   branch/reviewer/naming advice in this team's actual conventions instead of generic
+   guesses.
 6. `gather_suggested_repo` (see "Repo suggestion" above) resolves the repo/branch to
    suggest for step 2 of the guide ("Get set up"), and
    `repo_suggest.format_suggested_repo` renders it into its own prompt section.
@@ -138,14 +135,16 @@ independently of `case_guide.py`; its Markdown body is the actual system prompt.
 
 **Skip-if-unchanged:** if a guide already exists and is newer than its brief,
 `main` opens the existing guide instead of re-spending an ADO search + a `claude`
-call — `--force` bypasses this.
+call. There's no override flag -- delete the existing guide file to force a
+regenerate.
 
 **Config merge order** mirrors case-brief: `DEFAULTS` → `config.json` (deep-merged,
-then `_strip_comments` drops any leading-underscore documentation keys like
-`_comment` so they don't leak into dicts handed to `ado_api.*`) → CLI flags. This is
-also where `customer_repo_map` lives (empty list by default) — `--repo` on the CLI
-side is the one flag `resolve_suggested_repos` reads directly rather than through
-`cfg`, same as case-brief's former version of this did.
+then `strip_comments` drops any leading-underscore documentation keys like
+`_comment` so they don't leak into dicts handed to `ado_api.*`) → CLI flags.
+`azure_devops.pat_env_var`/`max_prs`/`style_pr_sample`, `customer_repo_map`, and
+`open_in_vscode` were all removed as config keys -- fixed to a hardcoded constant,
+a fixed sample size, no override, and always-on respectively, since none of them
+had ever actually been changed from their default.
 `_resolve_extra_args` is the one exception to "flags always win": `--no-claude-extra-args`
 must be able to say "run with zero extra args," which a plain `action="append"` flag
 can never express since it can only add, not replace-with-nothing.

@@ -6,11 +6,5 @@
     "project": null
   },
 
-  "_comment_customer_repo_map": "Optional. Which repo to suggest for the guide's 'Get set up' step, by CRM customer name -- same shape/override priority (customer_repo_map < --repo) as case-brief used to have.",
-  "customer_repo_map": [
-    { "customer_contains": "Contoso", "project": "MyProject", "repo": "my-repo" }
-  ],
-
-  "output_dir": "./case-guides",
-  "open_in_vscode": true
+  "output_dir": "./case-guides"
 }

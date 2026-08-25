@@ -14,10 +14,15 @@ from unittest import mock
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("TEST_AZDO_PAT", "fake-pat-for-tests")
 from lib import ado_api
 
-CFG = {"org_url": "https://dev.azure.com/org", "pat_env_var": "TEST_AZDO_PAT", "project": None, "max_prs": 2}
+# ado_api.PAT_ENV_VAR is a fixed constant now, not config -- overwrite (not
+# setdefault) so tests are deterministic regardless of what's in the real
+# environment (this module's Session.get is mocked everywhere below, so the
+# actual value never reaches a real request).
+os.environ["AZDO_PAT"] = "fake-pat-for-tests"
+
+CFG = {"org_url": "https://dev.azure.com/org", "project": None}
 
 
 class FakeResponse:
@@ -111,7 +116,7 @@ class FindRelatedTests(unittest.TestCase):
         }
 
     def test_happy_path_no_warnings(self):
-        cfg = {**CFG, "project": "ProjA", "max_prs": 5}
+        cfg = {**CFG, "project": "ProjA"}
         with mock.patch.object(requests.Session, "get", route(self._routes(pr_count=1))):
             branches, prs, warnings = ado_api.find_related(cfg, "T1")
         self.assertEqual(len(branches), 1)
@@ -120,14 +125,18 @@ class FindRelatedTests(unittest.TestCase):
         self.assertEqual(warnings, [])
 
     def test_pr_search_truncation_warning(self):
-        cfg = {**CFG, "project": "ProjA", "max_prs": 1}
-        with mock.patch.object(requests.Session, "get", route(self._routes(pr_count=1))):
+        # max_prs is a fixed constant now, not per-run config -- lower it
+        # via the module constant to exercise the cap without needing 50+
+        # fake PRs in the response.
+        cfg = {**CFG, "project": "ProjA"}
+        with mock.patch.object(ado_api, "DEFAULT_MAX_PRS", 1), \
+             mock.patch.object(requests.Session, "get", route(self._routes(pr_count=1))):
             _, _, warnings = ado_api.find_related(cfg, "T1")
         self.assertEqual(len(warnings), 1)
         self.assertIn("most recently updated PRs", warnings[0])
 
     def test_project_cap_warning_when_no_project_configured(self):
-        cfg = {**CFG, "project": None, "max_prs": 5}
+        cfg = {**CFG, "project": None}
         many_projects = FakeResponse({"value": [{"name": f"P{i}"} for i in range(ado_api.MAX_PROJECTS)]})
         routes = self._routes(pr_count=1)
         routes["_apis/projects"] = many_projects

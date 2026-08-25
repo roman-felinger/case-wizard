@@ -4,10 +4,10 @@
 A companion to case-brief, but a fully independent project -- it doesn't
 import case-brief's code, it just reads the Markdown brief case-brief's
 case_brief.py already wrote (case-brief/case-briefs/case-<code>.md by
-default) and, unless --skip-ado, re-queries Azure DevOps itself for one
-level of extra depth on each related branch/PR the brief mentions: commit
-messages, changed file paths, and review-thread comments -- context the
-brief's own summary doesn't include.
+default) and re-queries Azure DevOps itself for one level of extra depth on
+each related branch/PR the brief mentions: commit messages, changed file
+paths, and review-thread comments -- context the brief's own summary
+doesn't include.
 
 All of that -- the brief plus the extra ADO detail -- plus (unless disabled)
 the most recent previous guide as a house-style example and a sample of
@@ -22,22 +22,16 @@ claude's plain default persona.
 
 Needs the `claude` CLI (Claude Code) installed and already logged in --
 this just shells out to it once, non-interactively. Azure DevOps needs the
-same self-service PAT case-brief uses (see case-brief/README.md); skip that
-whole step with --skip-ado if you don't have one set up here (this also
-skips the other-recent-PRs convention sample, which needs the same ADO
-access).
+same self-service PAT case-brief uses (see case-brief/README.md).
 
 If a guide already exists for this case and is newer than the brief, this
 skips straight to opening it instead of re-spending an Azure DevOps search
-and a claude call -- pass --force to regenerate anyway.
+and a claude call.
 
 Examples:
     python case_guide.py T2611845
-    python case_guide.py T2611845 --skip-ado          # brief content only, no live re-query
     python case_guide.py T2611845 --model opus
     python case_guide.py T2611845 --no-open
-    python case_guide.py T2611845 --force              # regenerate even if already up to date
-    python case_guide.py T2611845 --show-prompt         # print the assembled prompt, don't call claude
     python case_guide.py T2611845 --claude-arg="--permission-mode" --claude-arg="default"
 """
 import argparse
@@ -64,29 +58,24 @@ from shared.config import deep_merge, strip_comments
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
 
+# Pure internal tuning constants -- no CLI flag ever existed for either, so
+# not worth a config setting either; see _truncate.
+MAX_ADO_DETAIL_CHARS = 20000
+MAX_EXAMPLE_CHARS = 4000
+
 DEFAULTS = {
     "brief_dir": "../case-brief/case-briefs",
     "output_dir": "./case-guides",
-    "open_in_vscode": True,
     "azure_devops": {
         "org_url": None,
         "project": None,
-        "pat_env_var": "AZDO_PAT",
-        "max_prs": ado_api.DEFAULT_MAX_PRS,
-        "style_pr_sample": 5,
     },
-    # Repo suggestion for the guide's "Get set up" step -- see
-    # lib/repo_suggest.py. Moved here from case-brief (see case-brief's
-    # CLAUDE.md), which used to guess this itself.
-    "customer_repo_map": [],
     "claude": {
         "model": None,
         "extra_args": [],
         "timeout": 600,
-        "max_ado_detail_chars": 20000,
         "agent": "case-guide-writer",
         "example_count": 1,
-        "max_example_chars": 4000,
     },
 }
 
@@ -228,7 +217,7 @@ def gather_ado_detail(cfg, case_number):
         return None, "no Azure DevOps org URL configured (set azure_devops.org_url in config.json or pass --org-url)"
 
     try:
-        session = ado_api.open_session(azure_cfg)
+        session = ado_api.open_session()
         branches, pull_requests, warnings = ado_api.find_related(azure_cfg, case_number, session=session)
     except Exception as e:
         return None, str(e)
@@ -272,11 +261,9 @@ def gather_style_prs(cfg, detail):
     ado_api.get_recent_prs) -- purely a style/convention reference, so
     failures here are never fatal to the run: any problem just yields
     (None, reason) and the prompt says plainly why the section is empty,
-    same transparency policy as format_ado_detail's warnings."""
+    same transparency policy as format_ado_detail's warnings. Always
+    samples 5 unless --no-style-prs is passed."""
     azure_cfg = cfg["azure_devops"]
-    sample_size = azure_cfg.get("style_pr_sample", 0)
-    if not sample_size:
-        return None, "disabled (azure_devops.style_pr_sample is 0)"
     if not azure_cfg.get("org_url"):
         return None, "no Azure DevOps org URL configured"
 
@@ -286,7 +273,7 @@ def gather_style_prs(cfg, detail):
 
     exclude_ids = {pr["id"] for pr in (detail or {}).get("pull_requests", [])}
     try:
-        prs = ado_api.get_recent_prs(azure_cfg, project, exclude_ids=exclude_ids, top=sample_size)
+        prs = ado_api.get_recent_prs(azure_cfg, project, exclude_ids=exclude_ids, top=5)
     except ado_api.AdoAuthError as e:
         return None, str(e)
     except Exception as e:
@@ -310,22 +297,13 @@ def format_style_prs(prs, reason):
     return "\n".join(lines)
 
 
-def gather_suggested_repo(cfg, repo_override, customer, detail, skip_ado):
+def gather_suggested_repo(cfg, customer, detail):
     """Which repo(s)/branch to suggest for the guide's "Get set up" step --
-    see lib/repo_suggest.py. Skipped entirely (not just degraded) when
-    --skip-ado is set, same as gather_style_prs: this needs the same Azure
-    DevOps access gather_ado_detail already declined to use, so there'd be
-    nothing left for it to confirm/guess against beyond a
-    customer_repo_map/--repo hit, and staying consistent with "no live Azure
-    DevOps calls this run" is less surprising than a partial exception to
-    it. Returns a {(project, repo): {clone_url, source}} dict -- possibly
-    empty -- see repo_suggest.merge_confirmed_and_guessed."""
-    if skip_ado:
-        return {}
+    see lib/repo_suggest.py. Returns a {(project, repo): {clone_url,
+    source}} dict -- possibly empty -- see
+    repo_suggest.merge_confirmed_and_guessed."""
     azure_cfg = cfg["azure_devops"]
-    guessed = repo_suggest.resolve_suggested_repos(
-        ado_api, azure_cfg, cfg.get("customer_repo_map", []), repo_override, customer,
-    )
+    guessed = repo_suggest.resolve_suggested_repos(ado_api, azure_cfg, customer)
     return repo_suggest.merge_confirmed_and_guessed(detail, guessed)
 
 
@@ -366,20 +344,19 @@ def format_ado_detail(detail, ado_error):
     return "\n".join(lines)
 
 
-def _truncate(text, limit, label="live Azure DevOps detail", config_key="claude.max_ado_detail_chars"):
+def _truncate(text, limit, label="live Azure DevOps detail"):
     """Cap text at `limit` characters, appending a visible marker instead
     of silently dropping the rest -- a case with a lot of related branch/PR
     activity (or a long house-style example guide) can otherwise inline an
     unbounded amount of text into the prompt with no sign anything was cut.
-    limit=None/0 disables this. label/config_key just keep the marker
-    accurate for whichever block is being capped."""
+    label just keeps the marker accurate for whichever block is being
+    capped."""
     if not limit or len(text) <= limit:
         return text
     omitted = len(text) - limit
     return (
         text[:limit]
-        + f"\n\n_(...truncated -- {omitted} more character(s) of {label} omitted "
-        f"to keep the prompt a reasonable size; see {config_key} in config.json.)_"
+        + f"\n\n_(...truncated -- {omitted} more character(s) of {label} omitted to keep the prompt a reasonable size.)_"
     )
 
 
@@ -517,10 +494,8 @@ def build_parser():
     parser.add_argument("case_number", help="Case code to write a guide for, e.g. T2611845 (must already have a brief -- run case-brief's case_brief.py first)")
     parser.add_argument("--brief-dir", metavar="DIR", help="Where to look for the case brief (default: config.json's brief_dir, ../case-brief/case-briefs)")
     parser.add_argument("--output-dir", metavar="DIR", help="Where to write the guide (default: config.json's output_dir, ./case-guides)")
-    parser.add_argument("--skip-ado", action="store_true", help="Don't re-query Azure DevOps for extra branch/PR detail -- use only what's already in the brief")
     parser.add_argument("--org-url", metavar="URL", help="Azure DevOps org URL override, e.g. https://dev.azure.com/myorg")
     parser.add_argument("--project", metavar="NAME", help="Restrict the Azure DevOps search to one project (default: config.json's azure_devops.project, or search every project in the org)")
-    parser.add_argument("--repo", metavar="PROJECT/REPO", help="Repo to suggest clone/branch commands for, e.g. MyProject/my-repo (overrides customer_repo_map; suggested even with no matching branches/PRs)")
     parser.add_argument("--model", metavar="NAME", help="Model for the headless claude call, e.g. opus/sonnet (default: config.json's claude.model, or claude's own default)")
     parser.add_argument("--claude-arg", metavar="ARG", action="append", dest="claude_args",
                          help="Extra raw argument to pass through to the claude CLI, repeatable "
@@ -531,16 +506,13 @@ def build_parser():
     parser.add_argument("--no-agent", action="store_true", help="Don't run claude as the case-guide-writer agent -- plain default persona instead")
     parser.add_argument("--no-example", action="store_true", help="Don't include a previous guide as a house-style example")
     parser.add_argument("--no-style-prs", action="store_true", help="Don't sample other recent PRs in the project for convention reference")
-    parser.add_argument("--show-prompt", action="store_true", help="Print the assembled prompt and exit -- doesn't call claude or write a guide")
-    parser.add_argument("--force", action="store_true", help="Regenerate the guide even if it's already newer than the brief")
     parser.add_argument("--no-open", action="store_true", help="Don't open the result in VS Code")
-    parser.add_argument("--config", metavar="PATH", default=CONFIG_PATH, help="Path to config.json (default: ./config.json)")
     return parser
 
 
 def main():
     args = build_parser().parse_args()
-    cfg = load_config(args.config)
+    cfg = load_config()
 
     if args.org_url:
         cfg["azure_devops"]["org_url"] = args.org_url
@@ -559,36 +531,30 @@ def main():
         )
 
     guide_path = os.path.join(output_dir, writer.guide_filename(f"case-{args.case_number}-for-dummies"))
-    if not args.show_prompt and not args.force and os.path.exists(guide_path):
-        if os.path.getmtime(guide_path) >= os.path.getmtime(brief_path):
-            print(f"{guide_path} is already up to date with the brief -- pass --force to regenerate anyway.")
-            if cfg["open_in_vscode"] and not args.no_open:
-                writer.open_editor(guide_path)
-            return
+    if os.path.exists(guide_path) and os.path.getmtime(guide_path) >= os.path.getmtime(brief_path):
+        print(f"{guide_path} is already up to date with the brief.")
+        if not args.no_open:
+            writer.open_editor(guide_path)
+        return
 
     print(f"Reading brief: {brief_path}")
     with open(brief_path, "r", encoding="utf-8") as f:
         brief_text = f.read()
 
-    detail = None
-    ado_detail_text = "_Skipped (--skip-ado) -- using only what's already in the brief above._"
-    if not args.skip_ado:
-        print("Fetching live Azure DevOps detail on related branches/PRs...")
-        detail, ado_error = gather_ado_detail(cfg, args.case_number)
-        ado_detail_text = format_ado_detail(detail, ado_error)
-    ado_detail_text = _truncate(ado_detail_text, cfg["claude"].get("max_ado_detail_chars"))
+    print("Fetching live Azure DevOps detail on related branches/PRs...")
+    detail, ado_error = gather_ado_detail(cfg, args.case_number)
+    ado_detail_text = format_ado_detail(detail, ado_error)
+    ado_detail_text = _truncate(ado_detail_text, MAX_ADO_DETAIL_CHARS)
 
     example_text = None
     if not args.no_example:
         example_text = find_example_guide(output_dir, os.path.basename(guide_path), cfg["claude"]["example_count"])
     example_text = _truncate(
-        format_example_guide(example_text), cfg["claude"].get("max_example_chars"),
-        label="the house-style example guide", config_key="claude.max_example_chars",
+        format_example_guide(example_text), MAX_EXAMPLE_CHARS, label="the house-style example guide",
     )
 
-    style_prs_reason = "skipped (--skip-ado)" if args.skip_ado else "skipped (--no-style-prs)"
-    style_prs_text = format_style_prs(None, style_prs_reason)
-    if not args.skip_ado and not args.no_style_prs:
+    style_prs_text = format_style_prs(None, "skipped (--no-style-prs)")
+    if not args.no_style_prs:
         print("Sampling other recent PRs in the project for style/convention reference...")
         style_prs, reason = gather_style_prs(cfg, detail)
         style_prs_text = format_style_prs(style_prs, reason)
@@ -596,16 +562,11 @@ def main():
     print("Working out which repo/branch to suggest...")
     customer = _extract_customer(brief_text)
     branch = repo_suggest.branch_name(args.case_number, _extract_case_title(brief_text))
-    suggested_repos = gather_suggested_repo(cfg, args.repo, customer, detail, args.skip_ado)
+    suggested_repos = gather_suggested_repo(cfg, customer, detail)
     suggested_repo_text = repo_suggest.format_suggested_repo(suggested_repos, branch)
 
     agent_name = None if args.no_agent else cfg["claude"]["agent"]
     prompt = build_prompt(args.case_number, brief_text, suggested_repo_text, ado_detail_text, example_text, style_prs_text)
-
-    if args.show_prompt:
-        print(f"[agent: {agent_name or '(none -- plain default persona)'}]\n")
-        print(prompt)
-        return
 
     print("Asking claude to write the guide (this can take a minute)...")
     guide_text = call_claude(
@@ -628,7 +589,7 @@ def main():
         guide_text,
         output_dir,
         f"case-{args.case_number}-for-dummies",
-        open_in_vscode=cfg["open_in_vscode"] and not args.no_open,
+        open_in_vscode=not args.no_open,
     )
     print(f"\nGuide written to {path}")
 

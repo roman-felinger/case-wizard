@@ -2,8 +2,8 @@
 pieces: the case-number sanitizer, the brief-lookup traversal guard and
 ambiguous-match safety, and the config-comment stripper. Deliberately not
 exhaustive over every formatting/rendering branch -- those are low-risk and
-easy to eyeball with --show-prompt; this file locks in the handful of things
-that would otherwise fail silently and dangerously (path traversal, a wrong
+easy to eyeball manually; this file locks in the handful of things that
+would otherwise fail silently and dangerously (path traversal, a wrong
 guess presented as certain, a stray `_comment` leaking into a request dict).
 
 Run with: python -m unittest discover -s tests   (from case-guide/)
@@ -130,11 +130,10 @@ class TruncateTests(unittest.TestCase):
         self.assertEqual(cg._truncate("hello", 5), "hello")
 
     def test_text_over_the_limit_is_capped_with_a_visible_truncation_note(self):
-        result = cg._truncate("hello world", 5, label="test detail", config_key="claude.test_key")
+        result = cg._truncate("hello world", 5, label="test detail")
         self.assertTrue(result.startswith("hello"))
         self.assertIn("truncated", result)
         self.assertIn("6 more character(s) of test detail omitted", result)
-        self.assertIn("claude.test_key", result)
 
     def test_a_falsy_limit_disables_truncation(self):
         long_text = "x" * 1000

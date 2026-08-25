@@ -26,13 +26,12 @@ top of that pipeline -- see README's Status section. What's left:
 - ~~Consider whether `case-guide/lib/ado_api.py`'s deliberate duplication of
   `case-brief/lib/ado_api.py` is worth it long-term.~~ **Decided:** only the
   pure, stable, byte-for-byte-identical piece (Basic-auth-header-from-PAT
-  construction, `_auth_header`/`_get_pat`) moved to the repo-root `shared/`
-  package (`shared/ado_auth.py`), now imported by both projects' `ado_api.py`
-  (and `app/azdo_check.py`). The higher-level search/query logic
-  (`find_related`, pagination, error handling, session reuse, concurrency,
-  `AdoAuthError`, `get_recent_prs`) stays an independent copy per project on
-  purpose -- case-guide's copy is genuinely ahead of case-brief's there, and
-  merging that would be a behavior change, not a cleanup.
+  construction) moved to the repo-root `shared/` package (`shared/ado_auth.py`),
+  now imported by both projects' `ado_api.py`. The higher-level search/query
+  logic (`find_related`, pagination, error handling, session reuse,
+  concurrency, `AdoAuthError`, `get_recent_prs`) stays an independent copy per
+  project on purpose -- case-guide's copy is genuinely ahead of case-brief's
+  there, and merging that would be a behavior change, not a cleanup.
 - **Verify the customer↔project auto-match against real ADO project names.**
   `lib/repo_suggest.py`'s fuzzy-matching (`_fuzzy_score`/`best_fuzzy_match`,
   moved here from case-brief) is unit-tested with made-up names but not yet
