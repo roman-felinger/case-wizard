@@ -124,6 +124,27 @@ class MergeConfirmedAndGuessedTests(unittest.TestCase):
         self.assertEqual(repo_suggest.merge_confirmed_and_guessed(None, []), {})
 
 
+class AnyGuessedTests(unittest.TestCase):
+    def test_true_when_any_entry_is_an_auto_match(self):
+        repos = {("P", "R"): {"clone_url": "https://x", "source": "auto-match"}}
+        self.assertTrue(repo_suggest.any_guessed(repos))
+
+    def test_false_when_every_entry_is_confirmed(self):
+        repos = {("P", "R"): {"clone_url": "https://x", "source": "ado-search"}}
+        self.assertFalse(repo_suggest.any_guessed(repos))
+
+    def test_true_when_mixed(self):
+        repos = {
+            ("P", "R1"): {"clone_url": "https://x", "source": "ado-search"},
+            ("P", "R2"): {"clone_url": "https://y", "source": "auto-match"},
+        }
+        self.assertTrue(repo_suggest.any_guessed(repos))
+
+    def test_false_when_empty_or_none(self):
+        self.assertFalse(repo_suggest.any_guessed({}))
+        self.assertFalse(repo_suggest.any_guessed(None))
+
+
 class FormatSuggestedRepoTests(unittest.TestCase):
     def test_no_repos_shows_the_generic_placeholder(self):
         text = repo_suggest.format_suggested_repo({}, "T1-fix")

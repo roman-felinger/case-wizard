@@ -31,10 +31,13 @@ Output: `case-guides/case-<code>-for-dummies.md`
 Edit `config.json` (optional) or use CLI flags. See `config.example.json`.
 Which repo to suggest for the guide's "Get set up" step is auto-guessed by
 fuzzy-matching the CRM customer name against Azure DevOps project/repo names
--- there's no manual override.
+-- there's no manual override. When the suggestion is a guess rather than a
+repo Azure DevOps actually confirmed for this case, the written guide always
+gets a "⚠️ guessed, not confirmed" warning right after its title — verify it
+before running any clone/checkout commands.
 
 ## Testing
 
 ```bash
-python -m unittest discover -s tests -v   # 87 tests, mocked, no network
+python -m unittest discover -s tests -v   # 88 tests, mocked, no network
 ```

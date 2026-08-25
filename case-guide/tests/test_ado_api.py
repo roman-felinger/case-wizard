@@ -151,47 +151,6 @@ class FindRelatedTests(unittest.TestCase):
                 ado_api.find_related(cfg, "T1")
 
 
-class GetRecentPrsTests(unittest.TestCase):
-    def _pr(self, i, reviewers=None):
-        return {
-            "pullRequestId": i, "title": f"Fix #{i}",
-            "repository": {"name": "repoA"},
-            "createdBy": {"displayName": "Jane"},
-            "sourceRefName": f"refs/heads/T{i}-fix",
-            "targetRefName": "refs/heads/test",
-            "reviewers": [{"displayName": r} for r in (reviewers or ["Bob"])],
-        }
-
-    def test_excludes_given_ids_and_respects_top(self):
-        prs = [self._pr(i) for i in range(5, 0, -1)]  # ids 5,4,3,2,1, most-recent-first
-        routes = {"pullrequests?searchCriteria": FakeResponse({"value": prs})}
-        with mock.patch.object(requests.Session, "get", route(routes)):
-            result = ado_api.get_recent_prs(CFG, "ProjA", exclude_ids={5, 3}, top=2)
-        self.assertEqual([pr["id"] for pr in result], [4, 2])
-
-    def test_maps_fields_from_the_list_response(self):
-        prs = [self._pr(1, reviewers=["Alice", "[Team]\\Admins"])]
-        routes = {"pullrequests?searchCriteria": FakeResponse({"value": prs})}
-        with mock.patch.object(requests.Session, "get", route(routes)):
-            result = ado_api.get_recent_prs(CFG, "ProjA", top=5)
-        self.assertEqual(result, [{
-            "id": 1, "title": "Fix #1", "repo": "repoA", "created_by": "Jane",
-            "source_branch": "T1-fix", "target_branch": "test",
-            "reviewers": ["Alice", "[Team]\\Admins"],
-        }])
-
-    def test_degrades_to_empty_list_on_request_failure(self):
-        routes = {}  # everything 404s via the default_status
-        with mock.patch.object(requests.Session, "get", route(routes)):
-            result = ado_api.get_recent_prs(CFG, "ProjA", top=5)
-        self.assertEqual(result, [])
-
-    def test_auth_error_propagates(self):
-        with mock.patch.object(requests.Session, "get", route({}, default_status=401)):
-            with self.assertRaises(ado_api.AdoAuthError):
-                ado_api.get_recent_prs(CFG, "ProjA", top=5)
-
-
 class GetPrDetailsTests(unittest.TestCase):
     def test_caps_comments_but_not_commits_or_files_a_second_time(self):
         commits = FakeResponse({"value": [{"comment": f"c{i}\nextra"} for i in range(3)]})

@@ -141,36 +141,6 @@ class TruncateTests(unittest.TestCase):
         self.assertEqual(cg._truncate(long_text, 0), long_text)
 
 
-class PickStyleProjectTests(unittest.TestCase):
-    def test_uses_the_configured_project_even_if_related_work_spans_others(self):
-        azure_cfg = {"project": "ConfiguredProj"}
-        detail = {"branches": [{"project": "Other"}], "pull_requests": []}
-        project, reason = cg._pick_style_project(azure_cfg, detail)
-        self.assertEqual(project, "ConfiguredProj")
-        self.assertIsNone(reason)
-
-    def test_falls_back_to_the_cases_single_matched_project_when_none_configured(self):
-        azure_cfg = {"project": None}
-        detail = {"branches": [{"project": "ProjA"}], "pull_requests": [{"project": "ProjA"}]}
-        project, reason = cg._pick_style_project(azure_cfg, detail)
-        self.assertEqual(project, "ProjA")
-        self.assertIsNone(reason)
-
-    def test_skips_with_a_reason_when_related_work_spans_multiple_projects(self):
-        azure_cfg = {"project": None}
-        detail = {"branches": [{"project": "ProjA"}], "pull_requests": [{"project": "ProjB"}]}
-        project, reason = cg._pick_style_project(azure_cfg, detail)
-        self.assertIsNone(project)
-        self.assertIn("ProjA", reason)
-        self.assertIn("ProjB", reason)
-
-    def test_skips_with_a_reason_when_there_is_no_related_work_to_infer_from(self):
-        azure_cfg = {"project": None}
-        project, reason = cg._pick_style_project(azure_cfg, None)
-        self.assertIsNone(project)
-        self.assertIn("no related branches/PRs", reason)
-
-
 class FormatAdoDetailTests(unittest.TestCase):
     def test_no_incomplete_note_when_the_search_fully_succeeded(self):
         detail = {
@@ -277,6 +247,46 @@ class ResolveExtraArgsTests(unittest.TestCase):
         cfg = {"claude": {"extra_args": ["--from-config"]}}
         args = self._args(no_claude_extra_args=False, claude_args=["--explicit"])
         self.assertEqual(cg._resolve_extra_args(args, cfg), ["--explicit"])
+
+
+class AddGuessWarningTests(unittest.TestCase):
+    """_add_guess_warning is the code-level guarantee that a fuzzy-matched
+    (unconfirmed) repo suggestion gets flagged in the actual written guide
+    -- not left to chance on claude's own rewrite of the Get Set Up section
+    keeping format_suggested_repo's inline "(guessed...)" annotation."""
+
+    GUIDE = "# Case T1 for Dummies\n\n## What this case is about\nSomething.\n"
+
+    def test_no_warning_when_nothing_was_guessed(self):
+        confirmed = {("P", "R"): {"clone_url": "https://x", "source": "ado-search"}}
+        self.assertEqual(cg._add_guess_warning(self.GUIDE, confirmed), self.GUIDE)
+
+    def test_no_warning_when_no_repo_was_suggested_at_all(self):
+        self.assertEqual(cg._add_guess_warning(self.GUIDE, {}), self.GUIDE)
+        self.assertEqual(cg._add_guess_warning(self.GUIDE, None), self.GUIDE)
+
+    def test_warning_inserted_right_after_the_title_when_a_repo_was_guessed(self):
+        guessed = {("P", "R"): {"clone_url": "https://x", "source": "auto-match"}}
+        result = cg._add_guess_warning(self.GUIDE, guessed)
+        lines = result.split("\n")
+        self.assertEqual(lines[0], "# Case T1 for Dummies")
+        self.assertIn("guessed, not confirmed", lines[2])
+        # The rest of claude's guide must still be there, untouched.
+        self.assertIn("## What this case is about", result)
+        self.assertIn("Something.", result)
+
+    def test_warning_still_applies_when_only_one_of_several_repos_was_guessed(self):
+        mixed = {
+            ("P", "R1"): {"clone_url": "https://x", "source": "ado-search"},
+            ("P", "R2"): {"clone_url": "https://y", "source": "auto-match"},
+        }
+        result = cg._add_guess_warning(self.GUIDE, mixed)
+        self.assertIn("guessed, not confirmed", result)
+
+    def test_handles_a_guide_with_no_newline_at_all(self):
+        result = cg._add_guess_warning("just one line", {("P", "R"): {"source": "auto-match"}})
+        self.assertIn("just one line", result)
+        self.assertIn("guessed, not confirmed", result)
 
 
 class ExtractFromBriefTests(unittest.TestCase):

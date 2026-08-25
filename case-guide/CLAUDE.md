@@ -17,7 +17,7 @@ case-brief's `case_brief.py <code>` first) and the `claude` CLI installed + logg
 -- every run calls `claude`, there's no dry/preview mode.
 
 ```
-python -m unittest discover -s tests -v   # from case-guide/ -- 87 tests, mocked, no network
+python -m unittest discover -s tests -v   # from case-guide/ -- 88 tests, mocked, no network
 python -m pytest tests                    # equivalent, if pytest is installed
 ```
 
@@ -70,6 +70,18 @@ same "confirmed beats guessed" priority case-brief's report.py used to apply).
 section (`--- SUGGESTED REPO/BRANCH ---`) rather than a finished "Get set up" heading
 — `claude` still writes that section's actual prose from it.
 
+**A guessed repo is never presented as confirmed, at two layers:**
+`format_suggested_repo` tags each auto-matched entry inline ("⚠️ guessed from
+customer name...") in the prompt itself, and `PROMPT_TEMPLATE`'s step 2 instructs
+`claude` to carry that tag into its own "Get set up" prose verbatim. Neither of those
+is a hard guarantee on its own -- `claude` could still paraphrase the warning away --
+so `case_guide.py::_add_guess_warning` is the actual guarantee: after `call_claude`
+returns, if `repo_suggest.any_guessed(suggested_repos)` is true, it force-inserts a
+standalone warning block right after the guide's title, independent of whatever
+`claude` did with the prompt's hint. This only fires when a repo came from the fuzzy
+customer-name match (`source == "auto-match"`) -- a repo confirmed via this run's own
+Azure DevOps search never gets it.
+
 `.claude/agents/case-guide-writer.md` is the persona the headless `claude` call runs
 as (step 7 below) — a normal, project-scoped Claude Code agent file, editable
 independently of `case_guide.py`; its Markdown body is the actual system prompt.
@@ -100,23 +112,21 @@ independently of `case_guide.py`; its Markdown body is the actual system prompt.
    helper (with a different `label`/limit) caps the house-style example below at
    `MAX_EXAMPLE_CHARS`. Both are fixed constants, not configurable -- no CLI flag ever
    existed for either.
-5. Two more context sources feed the same prompt, both skippable and both following
-   the same "explain why it's empty rather than silently omitting" policy as step 3:
-   `find_example_guide` picks the most recently written other guide in `output_dir`
-   (`--no-example` / `claude.example_count=0` disables) as a tone/structure anchor —
+5. One more context source feeds the same prompt, following the same "explain why
+   it's empty rather than silently omitting" policy as step 3: `find_example_guide`
+   picks the most recently written other guide in `output_dir` (`--no-example` /
+   `claude.example_count=0` disables) as a tone/structure anchor —
    `format_example_guide` is explicit it's not to be treated as source material.
-   `gather_style_prs` → `ado_api.get_recent_prs` samples the target project's other
-   recent completed PRs, always 5 unless `--no-style-prs` disables it
-   (`_pick_style_project` picks the project: configured, or the case's own single
-   matched project, else skipped with a reason) so the guide can ground
-   branch/reviewer/naming advice in this team's actual conventions instead of generic
-   guesses.
+   (An earlier version of this step also sampled the target project's other recent
+   completed PRs as a branch/reviewer/naming convention reference
+   (`gather_style_prs`/`ado_api.get_recent_prs`) — removed since it rarely changed
+   the guide's advice enough to justify the extra live ADO call; `case-guide-writer`'s
+   own house-style knowledge covers that ground now.)
 6. `gather_suggested_repo` (see "Repo suggestion" above) resolves the repo/branch to
    suggest for step 2 of the guide ("Get set up"), and
    `repo_suggest.format_suggested_repo` renders it into its own prompt section.
 7. `build_prompt` fills `PROMPT_TEMPLATE` (brief + suggested repo/branch + live ADO
-   detail + house-style example + style-reference PRs, one fixed 5-section guide
-   structure) and
+   detail + house-style example, one fixed 5-section guide structure) and
    `call_claude` shells out to `claude -p` non-interactively, piping the prompt on
    stdin. Resolved via `shutil.which` (not `shell=True`) so `--claude-arg` values
    can't be re-parsed/expanded by cmd.exe. The call runs as the `case-guide-writer`

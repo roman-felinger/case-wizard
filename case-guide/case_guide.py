@@ -10,9 +10,8 @@ paths, and review-thread comments -- context the brief's own summary
 doesn't include.
 
 All of that -- the brief plus the extra ADO detail -- plus (unless disabled)
-the most recent previous guide as a house-style example and a sample of
-this project's other recent completed PRs as a convention reference, gets
-handed to one headless `claude` call that writes the actual guide: the
+the most recent previous guide as a house-style example, gets handed to one
+headless `claude` call that writes the actual guide: the
 clone/branch commands to get set up, what's already been tried (if
 anything), a concrete plan for what still needs developing, and how to
 verify/ship it. That call runs as case-guide-writer, a project-scoped
@@ -239,64 +238,6 @@ def gather_ado_detail(cfg, case_number):
     return detail, None
 
 
-def _pick_style_project(azure_cfg, detail):
-    """Which project to sample get_recent_prs from: the one explicitly
-    configured, or -- if the case's own matched branches/PRs all resolve to
-    exactly one -- that one. Returns (project, reason_if_none) rather than
-    guessing among several candidate projects when there's no configured
-    default and the case's own related work spans more than one."""
-    if azure_cfg.get("project"):
-        return azure_cfg["project"], None
-    projects = {b["project"] for b in (detail or {}).get("branches", [])}
-    projects |= {pr["project"] for pr in (detail or {}).get("pull_requests", [])}
-    if len(projects) == 1:
-        return next(iter(projects)), None
-    if not projects:
-        return None, "no related branches/PRs to infer a project from, and azure_devops.project isn't configured"
-    return None, f"the case's related work spans multiple projects ({', '.join(sorted(projects))}) with no azure_devops.project configured to disambiguate"
-
-
-def gather_style_prs(cfg, detail):
-    """A sample of the target project's other recent completed PRs (see
-    ado_api.get_recent_prs) -- purely a style/convention reference, so
-    failures here are never fatal to the run: any problem just yields
-    (None, reason) and the prompt says plainly why the section is empty,
-    same transparency policy as format_ado_detail's warnings. Always
-    samples 5 unless --no-style-prs is passed."""
-    azure_cfg = cfg["azure_devops"]
-    if not azure_cfg.get("org_url"):
-        return None, "no Azure DevOps org URL configured"
-
-    project, reason = _pick_style_project(azure_cfg, detail)
-    if not project:
-        return None, reason
-
-    exclude_ids = {pr["id"] for pr in (detail or {}).get("pull_requests", [])}
-    try:
-        prs = ado_api.get_recent_prs(azure_cfg, project, exclude_ids=exclude_ids, top=5)
-    except ado_api.AdoAuthError as e:
-        return None, str(e)
-    except Exception as e:
-        return None, f"couldn't fetch a PR sample for project {project} ({e})"
-    if not prs:
-        return None, f"no other completed PRs found in project {project}"
-    return prs, None
-
-
-def format_style_prs(prs, reason):
-    if not prs:
-        return f"_No style-reference PRs available ({reason})._"
-    lines = ["### Other recent completed PRs in this project (style/convention reference only)"]
-    for pr in prs:
-        reviewers = ", ".join(pr["reviewers"]) if pr["reviewers"] else "—"
-        lines.append(
-            f"- **{pr['repo']} !{pr['id']}: {pr.get('title') or '—'}** "
-            f"({pr['source_branch']} -> {pr['target_branch']}, by {pr.get('created_by') or '—'}, "
-            f"reviewers: {reviewers})"
-        )
-    return "\n".join(lines)
-
-
 def gather_suggested_repo(cfg, customer, detail):
     """Which repo(s)/branch to suggest for the guide's "Get set up" step --
     see lib/repo_suggest.py. Returns a {(project, repo): {clone_url,
@@ -374,7 +315,9 @@ to finish. Cover, in this order:
    from the case description below.
 2. **Get set up** -- the exact `git clone` / `cd` / `git checkout -b` commands to run (use the \
    suggested repo/branch below if present; otherwise say plainly that no repo has been \
-   identified yet and what to do about it).
+   identified yet and what to do about it). If the suggested repo below is marked as guessed \
+   (fuzzy-matched from the customer name, not confirmed in Azure DevOps), you MUST carry that \
+   warning into this section verbatim -- never drop it or present a guess as a confirmed repo.
 3. **What's already been tried** -- if there are related branches/PRs below, summarize concretely \
    what they changed (from their commit messages / changed files / review comments) and whether \
    they look finished, still in review, or abandoned. If there's nothing related, say so plainly.
@@ -400,21 +343,39 @@ detail that isn't there. Output only the Markdown guide itself, nothing else -- 
 
 --- HOUSE STYLE EXAMPLE (tone/structure reference only -- an unrelated case, don't reuse its facts) ---
 {example_guide}
-
---- OTHER RECENT PRS IN THIS PROJECT (style/convention reference only, not related to this case) ---
-{style_prs}
 """
 
 
-def build_prompt(case_number, brief_text, suggested_repo_text, ado_detail_text, example_guide_text, style_prs_text):
+def build_prompt(case_number, brief_text, suggested_repo_text, ado_detail_text, example_guide_text):
     return PROMPT_TEMPLATE.format(
         case_number=case_number,
         brief=brief_text.strip(),
         suggested_repo=suggested_repo_text,
         ado_detail=ado_detail_text,
         example_guide=example_guide_text,
-        style_prs=style_prs_text,
     )
+
+
+def _add_guess_warning(guide_text, suggested_repos):
+    """Forces a visible warning right after the guide's title when any
+    suggested repo came from a fuzzy customer-name match rather than a
+    confirmed Azure DevOps hit -- a code-level guarantee rather than
+    hoping claude's own rewrite of the Get Set Up section keeps
+    format_suggested_repo's inline "(guessed...)" annotation (the prompt
+    does ask it to, but a human shouldn't have to trust that held)."""
+    if not repo_suggest.any_guessed(suggested_repos):
+        return guide_text
+    warning = (
+        "> ⚠️ **Repo/branch guessed, not confirmed.** The repo suggested below was "
+        "fuzzy-matched from the CRM customer name -- Azure DevOps has no branch or PR "
+        "linked to this case yet. Verify it's the right repo (and pick your own branch "
+        "name if the suggested one doesn't fit) before running any clone/checkout "
+        "commands below.\n"
+    )
+    heading, sep, rest = guide_text.partition("\n")
+    if not sep:
+        return guide_text + "\n\n" + warning
+    return f"{heading}\n\n{warning}{rest}"
 
 
 def _looks_like_guide(text):
@@ -505,7 +466,6 @@ def build_parser():
     parser.add_argument("--timeout", type=int, metavar="SECONDS", help="Give up waiting on claude after this long (default: config.json's claude.timeout, 600)")
     parser.add_argument("--no-agent", action="store_true", help="Don't run claude as the case-guide-writer agent -- plain default persona instead")
     parser.add_argument("--no-example", action="store_true", help="Don't include a previous guide as a house-style example")
-    parser.add_argument("--no-style-prs", action="store_true", help="Don't sample other recent PRs in the project for convention reference")
     parser.add_argument("--no-open", action="store_true", help="Don't open the result in VS Code")
     return parser
 
@@ -553,12 +513,6 @@ def main():
         format_example_guide(example_text), MAX_EXAMPLE_CHARS, label="the house-style example guide",
     )
 
-    style_prs_text = format_style_prs(None, "skipped (--no-style-prs)")
-    if not args.no_style_prs:
-        print("Sampling other recent PRs in the project for style/convention reference...")
-        style_prs, reason = gather_style_prs(cfg, detail)
-        style_prs_text = format_style_prs(style_prs, reason)
-
     print("Working out which repo/branch to suggest...")
     customer = _extract_customer(brief_text)
     branch = repo_suggest.branch_name(args.case_number, _extract_case_title(brief_text))
@@ -566,7 +520,7 @@ def main():
     suggested_repo_text = repo_suggest.format_suggested_repo(suggested_repos, branch)
 
     agent_name = None if args.no_agent else cfg["claude"]["agent"]
-    prompt = build_prompt(args.case_number, brief_text, suggested_repo_text, ado_detail_text, example_text, style_prs_text)
+    prompt = build_prompt(args.case_number, brief_text, suggested_repo_text, ado_detail_text, example_text)
 
     print("Asking claude to write the guide (this can take a minute)...")
     guide_text = call_claude(
@@ -584,6 +538,8 @@ def main():
             "anyway, but take a look before trusting it.",
             file=sys.stderr,
         )
+
+    guide_text = _add_guess_warning(guide_text, suggested_repos)
 
     path = writer.write_and_open(
         guide_text,

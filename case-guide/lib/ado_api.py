@@ -7,10 +7,7 @@ description contains the case number) so this tool can re-run it fresh;
 get_branch_commits/get_pr_details go one level deeper than case-brief does
 -- commit messages, changed files, review comments -- since that's exactly
 the context a "for dummies" guide needs to describe what related work
-already attempted. get_recent_prs is unrelated to the case itself -- a
-shallow sample of the project's other recent PRs, purely so a guide can
-match this team's actual branch/review/naming conventions instead of
-guessing.
+already attempted.
 
 Every request in this module goes through one requests.Session (built once
 by open_session, threaded through as the `session` argument) instead of a
@@ -222,48 +219,6 @@ def find_related(cfg, case_number, session=None):
         )
 
     return branches, pull_requests, warnings
-
-
-def get_recent_prs(cfg, project, exclude_ids=(), top=5, session=None):
-    """A lightweight sample of this project's other recent completed PRs --
-    not case-specific, just a style/convention reference so a guide can
-    ground its setup/ship advice in how this team actually works (what
-    branch PRs here target, who typically reviews, how branch names/titles
-    are actually formatted) instead of generic guesses. Deliberately shallow
-    compared to get_pr_details: title/branch/reviewers only, straight off
-    the same list response find_related already fetches -- no per-PR follow-
-    up request.
-
-    Over-fetches by len(exclude_ids) so filtering out the case's own
-    matched PR(s) (already shown elsewhere as this case's related work)
-    still leaves `top` PRs behind where possible; best-effort only, not
-    guaranteed to backfill if several of the top hits are excluded.
-    """
-    session = session or open_session()
-    org_url = cfg["org_url"].rstrip("/")
-    fetch_top = top + len(exclude_ids)
-    url = (
-        f"{org_url}/{project}/_apis/git/pullrequests"
-        f"?searchCriteria.status=completed&$top={fetch_top}&api-version=7.1"
-    )
-    prs = _get_or(url, session, default={}).get("value", [])
-
-    result = []
-    for pr in prs:
-        if pr["pullRequestId"] in exclude_ids:
-            continue
-        result.append({
-            "id": pr["pullRequestId"],
-            "title": pr.get("title"),
-            "repo": pr["repository"]["name"],
-            "created_by": (pr.get("createdBy") or {}).get("displayName"),
-            "source_branch": pr.get("sourceRefName", "").replace("refs/heads/", ""),
-            "target_branch": pr.get("targetRefName", "").replace("refs/heads/", ""),
-            "reviewers": [r.get("displayName") for r in pr.get("reviewers", []) if r.get("displayName")],
-        })
-        if len(result) >= top:
-            break
-    return result
 
 
 def get_branch_commits(cfg, project, repo_name, branch_name, max_commits=15, session=None):

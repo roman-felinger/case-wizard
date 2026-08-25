@@ -129,6 +129,16 @@ def merge_confirmed_and_guessed(detail, guessed):
     return repos
 
 
+def any_guessed(repos):
+    """True if any suggested repo came from a fuzzy customer-name match
+    rather than a confirmed Azure DevOps hit for this case. Used to force a
+    visible warning into the written guide (see case_guide.py's
+    _add_guess_warning) rather than relying on claude's own rewrite of the
+    Get Set Up section to keep format_suggested_repo's inline
+    "(guessed...)" annotation."""
+    return any(info.get("source") == "auto-match" for info in (repos or {}).values())
+
+
 def format_suggested_repo(repos, branch):
     """Markdown block describing which repo(s)/branch to use -- fed into the
     prompt as its own section (see case_guide.py's PROMPT_TEMPLATE) rather
@@ -145,7 +155,7 @@ def format_suggested_repo(repos, branch):
         )
     lines = []
     for (project, repo), info in repos.items():
-        lines.append(f"**{project}/{repo}:**" + (" _(guessed from customer name — verify before using)_" if info["source"] == "auto-match" else ""))
+        lines.append(f"**{project}/{repo}:**" + (" _(⚠️ guessed from customer name, not confirmed in Azure DevOps — verify before using)_" if info["source"] == "auto-match" else ""))
         lines.append("")
         lines.append("```")
         if info.get("clone_url"):
