@@ -26,7 +26,7 @@ $env:AZDO_PAT = "your-pat-here"    # or setx AZDO_PAT "your-pat-here"
 
 ## Usage
 
-From the repo root, `python case.py brief ...` is equivalent to everything below.
+From the repo root, `python case_wizard.py brief ...` is equivalent to everything below.
 
 ```bash
 python case_brief.py T2611845                  # lookup by ticket number (required for a real run)

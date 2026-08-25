@@ -231,7 +231,7 @@ Good plan output:
 
 ## Changes Required
 
-### File: src/models/case.py
+### File: src/models/case_wizard.py
 - **What**: Add priority field to Case model
 - **Why**: Guide requires priority-based sorting in list view
 - **Before**: The Case model has fields: id, title, description, created_at
@@ -241,7 +241,7 @@ Good plan output:
 ### File: tests/test_case_model.py
 - **What**: Add tests for priority field validation
 - **Why**: Ensure priority only accepts valid values
-- **Dependencies**: src/models/case.py must be updated first
+- **Dependencies**: src/models/case_wizard.py must be updated first
 
 ## Verification Steps
 - [ ] Run pytest to verify model tests pass

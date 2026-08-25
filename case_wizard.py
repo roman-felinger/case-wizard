@@ -3,7 +3,7 @@
 
 `brief`/`guide`/`solve` just forward everything after the stage name to that
 stage's own script -- its flags never need duplicating here, so
-`case.py brief -h` shows that script's real, current help text.
+`case_wizard.py brief -h` shows that script's real, current help text.
 
 `all` runs all three in order for one case (brief -> guide -> solve), calling
 each script via subprocess exactly as if you'd run them yourself one after
@@ -19,7 +19,7 @@ stdin/stdout are inherited, not captured.
   - brief has its own real --demo flag (fake CRM/ADO data) -- forwarded as-is.
   - guide/solve have no such flag (guide always makes a real `claude` call,
     solve always needs a real repo -- neither has a fake-data mode of its
-    own), so case.py strips --demo before forwarding and, if you didn't
+    own), so case_wizard.py strips --demo before forwarding and, if you didn't
     already give a case number, fills in case 12345 -- the case case-brief's
     own --demo run writes, checked into git (case-brief/case-briefs/case-
     12345.md and case-guide's matching case-guides/case-12345.md) so
@@ -27,17 +27,17 @@ stdin/stdout are inherited, not captured.
     setup.
 
 Examples:
-    python case.py brief T2611845
-    python case.py guide T2611845 --model opus
-    python case.py solve T2611845 --repo <url> --show-plan
-    python case.py brief -h                              # forwarded --help
+    python case_wizard.py brief T2611845
+    python case_wizard.py guide T2611845 --model opus
+    python case_wizard.py solve T2611845 --repo <url> --show-plan
+    python case_wizard.py brief -h                              # forwarded --help
 
-    python case.py guide --demo                           # same as: guide 12345
-    python case.py solve --demo --repo <url>
+    python case_wizard.py guide --demo                           # same as: guide 12345
+    python case_wizard.py solve --demo --repo <url>
 
-    python case.py all T2611845 --repo <url>              # full chain
-    python case.py all T2611845 --stop-after guide        # brief + guide only
-    python case.py all T2611845 --repo <url> --solve-arg --yes
+    python case_wizard.py all T2611845 --repo <url>              # full chain
+    python case_wizard.py all T2611845 --stop-after guide        # brief + guide only
+    python case_wizard.py all T2611845 --repo <url> --solve-arg --yes
 """
 import argparse
 import subprocess
@@ -78,7 +78,7 @@ def run_one(stage, argv):
 
 def build_chain_parser():
     parser = argparse.ArgumentParser(
-        prog="case.py all",
+        prog="case_wizard.py all",
         description="Run brief -> guide -> solve in order for one case.",
     )
     parser.add_argument("case_number", help="Case code, e.g. T2611845")

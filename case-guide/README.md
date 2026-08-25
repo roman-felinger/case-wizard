@@ -23,7 +23,7 @@ Use the repo root's `.venv` — it already has everything all three stages need:
 
 ## Usage
 
-From the repo root, `python case.py guide ...` is equivalent to everything below.
+From the repo root, `python case_wizard.py guide ...` is equivalent to everything below.
 
 ```bash
 python case_guide.py T2611845

@@ -8,7 +8,7 @@ Brief (gather context) → Guide (AI walkthrough) → Solve (auto-implement)
 
 Three independent CLI scripts (`case-brief`, `case-guide`, `case-solve`), each a
 standalone Python script with its own `-h` for the full flag list, plus a root
-`case.py` for running them from one place. There's no app or GUI — this is run from
+`case_wizard.py` for running them from one place. There's no app or GUI — this is run from
 a terminal.
 
 ## Setup
@@ -34,30 +34,30 @@ python -m playwright install chromium   # one-time, ~115 MB -- used for CRM scra
 
 ## Usage
 
-Each stage on its own, from its own folder or via `case.py` from the root — both are
+Each stage on its own, from its own folder or via `case_wizard.py` from the root — both are
 equivalent:
 
 ```bash
 python case-brief/case_brief.py T2611845
-python case.py brief T2611845                 # same thing
+python case_wizard.py brief T2611845                 # same thing
 
 python case-guide/case_guide.py T2611845
-python case.py guide T2611845                 # same thing
+python case_wizard.py guide T2611845                 # same thing
 
 python case-solve/case_solve.py T2611845 --repo https://dev.azure.com/org/proj/_git/repo
-python case.py solve T2611845 --repo <url>    # same thing
+python case_wizard.py solve T2611845 --repo <url>    # same thing
 ```
 
 Or chain all three for one case:
 
 ```bash
-python case.py all T2611845 --repo <url>              # brief -> guide -> solve
-python case.py all T2611845 --stop-after guide        # brief + guide only
-python case.py all -h                                 # per-stage passthrough, etc.
+python case_wizard.py all T2611845 --repo <url>              # brief -> guide -> solve
+python case_wizard.py all T2611845 --stop-after guide        # brief + guide only
+python case_wizard.py all -h                                 # per-stage passthrough, etc.
 ```
 
 A failed stage stops the chain — there's no point running guide off a brief that
-never got written. `case.py all` is just a thin wrapper: it runs each stage's script
+never got written. `case_wizard.py all` is just a thin wrapper: it runs each stage's script
 in a subprocess, in order, the same as running them by hand. `--repo` is only ever
 forwarded to solve; use `--brief-arg`/`--guide-arg`/`--solve-arg` (repeatable) for
 anything else a given stage's own `-h` lists.

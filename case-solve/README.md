@@ -13,7 +13,7 @@ Use the repo root's `.venv` — it already has everything all three stages need:
 
 ## Usage
 
-From the repo root, `python case.py solve ...` is equivalent to everything below.
+From the repo root, `python case_wizard.py solve ...` is equivalent to everything below.
 
 ```bash
 python case_solve.py T2611845 --repo https://dev.azure.com/org/proj/_git/repo

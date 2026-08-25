@@ -43,7 +43,7 @@ check the script itself still runs.
 
 **Guide:** needs an existing brief for that case number (run case-brief first) and a
 working `claude` login — there's no dry-run mode, every run makes a real `claude`
-call. `python case.py guide --demo` (or `python case-guide/case_guide.py 12345`) runs
+call. `python case_wizard.py guide --demo` (or `python case-guide/case_guide.py 12345`) runs
 against the checked-in demo brief if you just want to check the script itself works.
 
 **Solve:** needs a real, reachable git clone URL (`--repo`) — push access isn't
