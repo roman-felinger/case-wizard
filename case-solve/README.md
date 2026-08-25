@@ -45,8 +45,8 @@ Requires:
 5. Claude reads the guide + repo structure, generates an implementation plan, then
    file-by-file steps
 6. Applies the changes
-7. Auto-detects and runs tests/lint/build
-8. Groups changes into logical commits
+7. Auto-detects and runs tests, build, lint
+8. Groups changes into logical commits, by category
 9. Writes a verification checklist
 
 Output:

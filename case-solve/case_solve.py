@@ -13,13 +13,15 @@ Each run:
   - Clones repo (or uses cached clone) and creates a case-specific branch
   - Installs dependencies (pip, npm, dotnet, cargo as detected)
   - Uses Claude to guide implementation step-by-step, applying changes
-  - Runs tests, lint, build checks (auto-detects available tools)
-  - Creates logical git commits (one per logical change)
+  - Runs tests, build, lint checks (auto-detects available tools)
+  - Groups changes into logical commits by category (tests, dependencies,
+    config, docs, source, other)
   - Outputs a verification checklist for manual steps
   - Generates a summary report
 
-Output lands in case-solves/<case-code>/ with the cloned repo, branch info,
-and a verification checklist for the developer to review before pushing.
+The cloned repo is cached at case-solves/repos/<repo-name>/ (shared, reused
+across cases); case-solves/<case-code>/ holds this case's branch info and
+verification checklist for the developer to review before pushing.
 
 Usage:
   python case_solve.py T2611845                    # Full run, prompts for repo

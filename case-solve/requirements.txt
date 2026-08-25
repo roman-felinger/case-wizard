@@ -1,1 +1,3 @@
-requests>=2.31
+# case-solve has no third-party dependencies of its own: git/claude/the target
+# repo's own dependency manager (pip/npm/cargo/dotnet) are all shelled out to,
+# and case_solve.py/lib/*.py only use the stdlib plus the repo-root shared/ package.

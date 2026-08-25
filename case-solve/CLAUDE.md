@@ -37,8 +37,9 @@ guided by Claude.
 4. **Workspace setup** — clone (or fetch), create `case/<case-number>` branch
 5. **Install dependencies** — auto-detect Python/Node/Rust/.NET and install
 6. **Implementation** — Claude reads guide + repo structure, generates plan, applies changes
-7. **Verification** — run tests, lint, build (auto-detect available tools)
-8. **Commit** — group changes by category (tests, config, docs, source), one commit per group
+7. **Verification** — run tests, build, lint (auto-detect available tools)
+8. **Commit** — group changes by category (tests, dependencies, config, docs, source,
+   other), one commit per group
 9. **Report** — generate verification checklist, next steps
 
 **Key modules:**
@@ -101,28 +102,27 @@ flags nobody's asked for.
 
 ## Testing Approach
 
-This project is verify-by-running-against-real-cases, not unit-test heavy:
+141 mocked unit tests (`tests/`, one file per `lib/` module plus `case_solve.py`'s own
+CLI wiring/pure logic) cover each module in isolation -- no real `claude` call, no real
+repo, no real subprocess. What those tests can't cover, `--show-plan`/`--dry-run` plus
+a real case/repo combination are still for:
 
 - `--show-plan` lets you see what Claude plans before applying
 - `--dry-run` previews changes without committing
-- Early smoke tests: run against a real case/repo combination to validate plan+steps
-- Edge cases: merge conflicts, permission denied, etc. — handle as they arise
+- Real end-to-end runs: an actual `claude` call producing a usable plan/steps against a
+  real repo, and edge cases (merge conflicts, permission denied, etc.) as they arise
 
 ## Status
 
-MVP: working directory structure, argument parsing, config merging, workspace setup,
-dependency detection, skeleton of Claude integration.
+Every pipeline stage is implemented and unit-tested: workspace setup (clone/fetch,
+branch, dependency install), `implementer.py`'s two-stage Claude interaction (plan →
+steps → apply), `verifier.py`'s auto-detected tests/build/lint, `committer.py`'s
+category-grouped commits, and `report.py`'s checklist/summary generation.
 
-Verified:
-- Python packaging conventions followed
-- Config inheritance works
-- Workspace setup (clone, branch, basic dependency install)
-
-Not yet exercised end-to-end:
-- An actual Claude call for plan generation
-- A real repo with actual changes applied
-- Full verification suite against a live project
-- Edge cases (conflicts, missing tools, permission errors)
+Not yet exercised end-to-end against something real:
+- An actual `claude` call producing a usable plan/steps
+- A real repo with actual changes applied, verified, and committed
+- Edge cases (merge conflicts, missing tools, permission errors)
 
 ## Future Improvements
 
