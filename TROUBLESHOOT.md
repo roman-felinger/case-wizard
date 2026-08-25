@@ -14,7 +14,8 @@ tools from reading their session cookies (an anti-malware protection, not a bug 
 our end).
 
 1. Run `python case-brief/case_brief.py <case-number>` — a real browser window opens
-   pointed at CRM.
+   pointed at CRM (later runs may skip the window entirely and reuse the session
+   headlessly if it's still valid).
 2. Log in there if prompted. The session persists (cached in that dedicated
    profile), so this is normally a one-time thing across runs.
 
@@ -41,9 +42,9 @@ number actually exists in CRM. `--demo` skips CRM/ADO entirely if you just want 
 check the script itself still runs.
 
 **Guide:** needs an existing brief for that case number (run case-brief first) and a
-working `claude` login. `--show-prompt` assembles the prompt without calling `claude`,
-useful for isolating whether the problem is upstream (brief/ADO data) or in the
-`claude` call itself.
+working `claude` login — there's no dry-run mode, every run makes a real `claude`
+call. `python case.py guide --demo` (or `python case-guide/case_guide.py 12345`) runs
+against the checked-in demo brief if you just want to check the script itself works.
 
 **Solve:** needs a real, reachable git clone URL (`--repo`) — push access isn't
 required, it only clones, branches, and commits locally; you push yourself. Common

@@ -118,7 +118,7 @@ python run_tests.py brief guide  # just these
 
 ## Status
 
-- **Brief:** CRM + ADO working, 128 tests (`case-brief/tests/`)
+- **Brief:** CRM + ADO working, 122 tests (`case-brief/tests/`)
 - **Guide:** stable, 88 tests (`case-guide/tests/`)
 - **Solve:** MVP — clone/branch/dependency-install verified, 141 tests
   (`case-solve/tests/`); a real end-to-end Claude implementation run against a live
