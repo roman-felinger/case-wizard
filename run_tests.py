@@ -8,6 +8,10 @@ module names and errors out (`ModuleNotFoundError` on the second and third).
 Running one subprocess per stage, cwd'd into that stage's folder -- exactly
 what each stage's own README already documents -- avoids that entirely.
 
+Output is one row per stage (result + a one-line note), not each stage's raw
+dot-per-test log -- a failing stage's full output is printed afterward, since
+a compact table isn't enough to debug an actual failure from.
+
 Examples:
     python run_tests.py              # all three
     python run_tests.py brief guide  # just these
@@ -28,11 +32,35 @@ def pytest_available():
     ).returncode == 0
 
 
+def summarize(output):
+    """The one line worth showing for a run: pytest's own final summary line
+    ("88 passed in 0.24s" / "3 failed, 85 passed in 0.30s"), or for the
+    unittest fallback, its "Ran N tests in Xs" line plus the OK/FAILED verdict
+    that follows it on its own line."""
+    lines = [l.strip() for l in output.splitlines() if l.strip()]
+    if not lines:
+        return "(no output)"
+    last = lines[-1]
+    if last == "OK" or last.startswith("FAILED"):
+        ran = next((l for l in reversed(lines) if l.startswith("Ran ")), "")
+        return f"{ran} -- {last}" if ran else last
+    return last
+
+
 def run_stage(stage, use_pytest):
-    print(f"\n=== case-{stage} ===", flush=True)
     cmd = [sys.executable, "-m", "pytest", "tests", "-q"] if use_pytest \
-        else [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"]
-    return subprocess.run(cmd, cwd=DIRS[stage]).returncode == 0
+        else [sys.executable, "-m", "unittest", "discover", "-s", "tests"]
+    result = subprocess.run(cmd, cwd=DIRS[stage], capture_output=True, text=True)
+    output = result.stdout + result.stderr
+    return result.returncode == 0, summarize(output), output
+
+
+def print_table(rows):
+    stage_w = max(len(f"case-{stage}") for stage in rows) + 2
+    result_w = len("RESULT") + 2
+    print(f"{'STAGE':<{stage_w}}{'RESULT':<{result_w}}NOTES")
+    for stage, (ok, notes, _) in rows.items():
+        print(f"{'case-' + stage:<{stage_w}}{'PASS' if ok else 'FAIL':<{result_w}}{notes}")
 
 
 def main(argv=None):
@@ -44,15 +72,16 @@ def main(argv=None):
         return 2
 
     use_pytest = pytest_available()
-    print(f"Using {'pytest' if use_pytest else 'unittest (pytest not installed)'}")
+    print(f"Using {'pytest' if use_pytest else 'unittest (pytest not installed)'}\n")
 
-    results = {stage: run_stage(stage, use_pytest) for stage in stages}
+    rows = {stage: run_stage(stage, use_pytest) for stage in stages}
+    print_table(rows)
 
-    print("\n=== summary ===")
-    for stage, ok in results.items():
-        print(f"  case-{stage}: {'PASS' if ok else 'FAIL'}")
+    failed = {stage: output for stage, (ok, _, output) in rows.items() if not ok}
+    for stage, output in failed.items():
+        print(f"\n=== case-{stage} output ===\n{output.rstrip()}")
 
-    return 0 if all(results.values()) else 1
+    return 0 if not failed else 1
 
 
 if __name__ == "__main__":
