@@ -23,12 +23,15 @@ Two ways to find them, in order of preference:
     from all time" cheaply. Projects searched are capped at MAX_PROJECTS as
     a safety net for very large orgs.
 """
-import base64
 import os
 import re
+import sys
 from urllib.parse import quote, unquote
 
 import requests
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from shared.ado_auth import auth_header as _auth_header, get_pat as _get_pat_by_env
 
 DEFAULT_MAX_PRS = 50
 MAX_PROJECTS = 50
@@ -45,19 +48,8 @@ _ADO_LINK_RE = re.compile(
 )
 
 
-def _auth_header(pat):
-    token = base64.b64encode(f":{pat}".encode()).decode()
-    return {"Authorization": f"Basic {token}", "Content-Type": "application/json"}
-
-
 def _get_pat(cfg):
-    pat = os.environ.get(cfg["pat_env_var"])
-    if not pat:
-        raise RuntimeError(
-            f"Azure DevOps PAT not found. Set env var {cfg['pat_env_var']} "
-            "(create one at https://dev.azure.com/{org}/_usersSettings/tokens)."
-        )
-    return pat
+    return _get_pat_by_env(cfg["pat_env_var"])
 
 
 def list_projects(cfg):
@@ -297,49 +289,3 @@ def find_related(cfg, case_number):
         print(f"  [{i}/{total}] {project}: {len(repos)} repo(s) -- {branch_hits} matching branch(es), {pr_hits} matching PR(s)")
 
     return branches, pull_requests, prs_truncated, max_prs
-
-
-def find_work_items(cfg, case_number):
-    """Kept for the --api fallback / in case work items become relevant
-    again -- not used by the default flow (see find_related).
-    Unlike that, this needs a specific project configured."""
-    pat = _get_pat(cfg)
-    org_url = cfg["org_url"].rstrip("/")
-    project = cfg["project"]
-    fields = cfg.get("search_fields", ["System.Title", "System.Description"])
-    clauses = " OR ".join([f"[{f}] CONTAINS '{case_number}'" for f in fields])
-
-    wiql = {
-        "query": (
-            "SELECT [System.Id], [System.Title], [System.State], [System.WorkItemType] "
-            f"FROM WorkItems WHERE [System.TeamProject] = '{project}' AND ({clauses}) "
-            "ORDER BY [System.ChangedDate] DESC"
-        )
-    }
-    wiql_url = f"{org_url}/{project}/_apis/wit/wiql?api-version=7.1"
-    resp = requests.post(wiql_url, headers=_auth_header(pat), json=wiql, timeout=30)
-    resp.raise_for_status()
-    ids = [str(item["id"]) for item in resp.json().get("workItems", [])][:20]
-    if not ids:
-        return []
-
-    items_url = (
-        f"{org_url}/_apis/wit/workitems?ids={','.join(ids)}"
-        "&fields=System.Title,System.State,System.WorkItemType,System.ChangedDate"
-        "&api-version=7.1"
-    )
-    resp = requests.get(items_url, headers=_auth_header(pat), timeout=30)
-    resp.raise_for_status()
-
-    results = []
-    for wi in resp.json().get("value", []):
-        f = wi["fields"]
-        results.append({
-            "id": wi["id"],
-            "url": f"{org_url}/{project}/_workitems/edit/{wi['id']}",
-            "type": f.get("System.WorkItemType"),
-            "title": f.get("System.Title"),
-            "state": f.get("System.State"),
-            "changed_on": f.get("System.ChangedDate"),
-        })
-    return results

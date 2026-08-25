@@ -352,37 +352,5 @@ class GetBranchTests(unittest.TestCase):
         self.assertIsNone(result)
 
 
-class FindWorkItemsTests(unittest.TestCase):
-    def test_maps_fields_from_the_work_item_batch_response(self):
-        cfg = {**CFG, "project": "ProjA", "search_fields": ["System.Title"]}
-        wiql_result = FakeResponse({"workItems": [{"id": 42}]})
-        items_result = FakeResponse({"value": [{
-            "id": 42,
-            "fields": {
-                "System.Title": "Fix the thing",
-                "System.State": "Active",
-                "System.WorkItemType": "Bug",
-                "System.ChangedDate": "2026-08-01T00:00:00Z",
-            },
-        }]})
-        with mock.patch("requests.post", return_value=wiql_result), \
-             mock.patch("requests.get", return_value=items_result):
-            result = ado_api.find_work_items(cfg, "T1")
-        self.assertEqual(result, [{
-            "id": 42, "url": "https://dev.azure.com/org/ProjA/_workitems/edit/42",
-            "type": "Bug", "title": "Fix the thing", "state": "Active",
-            "changed_on": "2026-08-01T00:00:00Z",
-        }])
-
-    def test_no_matching_work_items_short_circuits_without_a_second_request(self):
-        cfg = {**CFG, "project": "ProjA"}
-        wiql_result = FakeResponse({"workItems": []})
-        with mock.patch("requests.post", return_value=wiql_result), \
-             mock.patch("requests.get") as get_mock:
-            result = ado_api.find_work_items(cfg, "T1")
-        self.assertEqual(result, [])
-        get_mock.assert_not_called()
-
-
 if __name__ == "__main__":
     unittest.main()

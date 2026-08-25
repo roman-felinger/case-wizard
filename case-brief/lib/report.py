@@ -1,11 +1,11 @@
 """Renders the collected case data into a Markdown brief."""
 import os
 import re
-import subprocess
+import sys
 
-
-def _safe_name(text):
-    return re.sub(r"[^\w.-]+", "_", str(text)).strip("_") or "unlabeled"
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from shared.editor import open_in_editor
+from shared.safe_name import safe_name as _safe_name
 
 
 _MD_BLOCK_TRIGGER = re.compile(r"^(#{1,6}(\s|$)|[=\-_*]+$|>|```|~~~)")
@@ -217,9 +217,6 @@ def write_and_open(markdown, output_dir, case_number, open_in_vscode=True):
         f.write(markdown)
 
     if open_in_vscode:
-        try:
-            subprocess.run(["code", path], shell=True, check=False)
-        except FileNotFoundError:
-            pass
+        open_in_editor(path)
 
     return path

@@ -2,11 +2,11 @@
 Progress reporting for case_brief.py.
 
 Prints one JSON line per update to stdout: {"operation", "status", "detail"}.
-The Streamlit app (app/progress.py's stream_subprocess_output /
-show_stage_tab) reads this subprocess's stdout line-by-line and parses
-each line as JSON to drive the live progress display. Anything not
-valid JSON is shown as raw output instead, so plain prints still work -
-this just makes the structured, per-step version case-wizard expects.
+The Streamlit app (app/main.py's run_button block) reads this subprocess's
+stdout line-by-line and parses each line as JSON to drive the live progress
+display. Anything not valid JSON is shown as raw output instead, so plain
+prints still work - this just makes the structured, per-step version
+case-wizard expects.
 """
 import json
 import sys

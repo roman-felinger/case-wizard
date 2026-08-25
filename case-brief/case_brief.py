@@ -30,20 +30,17 @@ import json
 import os
 import sys
 
-# This script prints Unicode (checkmarks, arrows, etc.). Windows' default
-# console/subprocess-pipe encoding is the system ANSI codepage (e.g.
-# cp1250), not UTF-8, which crashes on those characters whether run
-# directly in a terminal or piped from case-wizard's subprocess call.
-if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+from shared.console import enable_utf8_console
+
+enable_utf8_console()  # this script prints Unicode; see shared/console.py
+
 from lib import ado_api, browser, crm_scrape, report
 from lib.report import DEFAULT_PROMOTED_FIELDS
 from lib.progress import progress, progress_success, progress_error, Phase
+from shared.config import deep_merge, strip_comments
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
@@ -79,15 +76,6 @@ DEFAULTS = {
 }
 
 
-def _deep_merge(base, override):
-    for key, value in override.items():
-        if isinstance(value, dict) and isinstance(base.get(key), dict):
-            _deep_merge(base[key], value)
-        else:
-            base[key] = value
-    return base
-
-
 def load_config(path=CONFIG_PATH):
     """Starts from DEFAULTS, layers config.json over it if present. Nothing
     here is required -- config.json existing at all is optional, and every
@@ -96,8 +84,8 @@ def load_config(path=CONFIG_PATH):
     cfg = copy.deepcopy(DEFAULTS)
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
-            _deep_merge(cfg, json.load(f))
-    return cfg
+            deep_merge(cfg, json.load(f))
+    return strip_comments(cfg)
 
 
 def apply_cli_overrides(cfg, args):

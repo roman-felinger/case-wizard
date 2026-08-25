@@ -5,8 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+..\.venv\Scripts\Activate.ps1   # from case-brief/, on Windows -- repo root's venv has everything
 
 python case_brief.py --demo             # no browser/API calls, fake data — fastest way to check report.py changes
 python case_brief.py T2611845           # real run: CRM lookup by ticket number + ADO search
@@ -14,10 +13,17 @@ python case_brief.py --skip-browser     # ADO-only, no Chrome
 python case_brief.py -h                 # full flag list
 ```
 
-No lint/test commands — no committed test suite (see root CLAUDE.md and README's
-"Status" section for what's actually been verified against live data vs. plausible
-inputs only). `--demo` is the fastest smoke test for `report.py`/CLI-plumbing changes
-since it skips Chrome and both APIs entirely.
+```
+python -m unittest discover -s tests -v   # from case-brief/ -- 154 tests, mocked, no network
+python -m pytest tests                    # equivalent, if pytest is installed
+```
+
+Deliberately not exhaustive over every CLI flag or every branch of `build_parser`/
+`main` — those are low-risk plumbing, easily eyeballed with `--demo`-style manual
+runs. See root CLAUDE.md and README's "Status" section for what's actually been
+verified against live data vs. plausible inputs only. `--demo` is the fastest smoke
+test for `report.py`/CLI-plumbing changes since it skips Chrome and both APIs
+entirely.
 
 ## Architecture
 

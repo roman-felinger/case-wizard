@@ -10,9 +10,10 @@ python case_brief.py --demo        # fake data, no setup needed
 
 ## Real Setup
 
+Use the repo root's `.venv` — it already has everything all three stages need:
+
 ```bash
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+..\.venv\Scripts\Activate.ps1      # from case-brief/, on Windows
 ```
 
 Set Azure DevOps PAT:

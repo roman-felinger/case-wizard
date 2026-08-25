@@ -261,7 +261,7 @@ class WriteAndOpenTests(unittest.TestCase):
         # the result is always one filename directly inside output_dir and
         # can never escape it as a nested/relative path.
         with tempfile.TemporaryDirectory() as d:
-            with mock.patch("lib.report.subprocess.run") as run_mock:
+            with mock.patch("shared.editor.subprocess.run") as run_mock:
                 path = report.write_and_open("content", d, "T1/../2", open_in_vscode=False)
             run_mock.assert_not_called()
             self.assertTrue(os.path.exists(path))
@@ -275,19 +275,20 @@ class WriteAndOpenTests(unittest.TestCase):
     def test_creates_output_dir_if_missing(self):
         with tempfile.TemporaryDirectory() as d:
             nested = os.path.join(d, "not-yet-created")
-            with mock.patch("lib.report.subprocess.run"):
+            with mock.patch("shared.editor.subprocess.run"):
                 path = report.write_and_open("content", nested, "T1", open_in_vscode=False)
             self.assertTrue(os.path.exists(path))
 
     def test_open_in_vscode_true_invokes_subprocess_run(self):
         with tempfile.TemporaryDirectory() as d:
-            with mock.patch("lib.report.subprocess.run") as run_mock:
+            with mock.patch("shared.editor.shutil.which", return_value="C:/fake/code.cmd"), \
+                 mock.patch("shared.editor.subprocess.run") as run_mock:
                 report.write_and_open("content", d, "T1", open_in_vscode=True)
             run_mock.assert_called_once()
 
     def test_missing_code_executable_does_not_prevent_the_file_from_being_written(self):
         with tempfile.TemporaryDirectory() as d:
-            with mock.patch("lib.report.subprocess.run", side_effect=FileNotFoundError):
+            with mock.patch("shared.editor.shutil.which", return_value=None):
                 path = report.write_and_open("content", d, "T1", open_in_vscode=True)
             self.assertTrue(os.path.exists(path))
 
