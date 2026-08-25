@@ -59,7 +59,6 @@ DEFAULTS = {
     "run_tests": True,
     "run_lint": True,
     "run_build": True,
-    "github_base": None,  # e.g., "https://github.com/myorg" for opening PRs
     "claude": {
         "model": None,
         "agent": "case-solver",

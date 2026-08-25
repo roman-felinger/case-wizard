@@ -59,7 +59,6 @@ DEFAULTS = {
         "org_url": None,
         "project": None,
         "pat_env_var": "AZDO_PAT",
-        "search_fields": ["System.Title", "System.Description"],
         "max_prs": ado_api.DEFAULT_MAX_PRS,
         # Off by default: find_related's org-wide branch/PR search is slow
         # (every repo's every branch, in every project) and is only a
