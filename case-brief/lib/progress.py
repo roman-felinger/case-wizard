@@ -1,24 +1,20 @@
-"""
-Progress reporting for case_brief.py.
+"""Progress reporting for case_brief.py: plain, human-readable status lines
+to stdout, one per phase -- e.g. "Loading demo data..." then "OK Loaded".
 
-Prints one JSON line per update to stdout: {"operation", "status", "detail"}.
-The Streamlit app (app/main.py's run_button block) reads this subprocess's
-stdout line-by-line and parses each line as JSON to drive the live progress
-display. Anything not valid JSON is shown as raw output instead, so plain
-prints still work - this just makes the structured, per-step version
-case-wizard expects.
+Used to be a JSON-lines protocol case-wizard's Streamlit app parsed
+line-by-line to drive a live progress display; that app is gone
+(case-wizard is CLI-only now), so this just prints readable text, the same
+way case-guide/case-solve's plain print() calls already do.
 """
-import json
-import sys
 
 
 def progress(operation: str, status: str = "running", detail: str = ""):
     """Emit one progress update."""
-    print(json.dumps({
-        "operation": operation,
-        "status": status,
-        "detail": detail,
-    }), flush=True)
+    prefix = {"success": "✓ ", "error": "✗ "}.get(status, "")
+    line = f"{prefix}{operation}"
+    if detail:
+        line += f" -- {detail}"
+    print(line, flush=True)
 
 
 def progress_success(operation: str, detail: str = ""):

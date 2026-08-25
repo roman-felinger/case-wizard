@@ -1,23 +1,17 @@
-"""Unit tests for lib/progress.py, the newest module here: a thin JSON-lines
-progress protocol that case-wizard's Streamlit app parses line-by-line from
-this subprocess's stdout to drive a live progress display.
+"""Unit tests for lib/progress.py: plain, human-readable status lines to
+stdout (e.g. "Op..." then "✓ Op"), and the Phase context manager built on
+top of it.
 
-The correctness bar for this module is narrow but important precisely
-because the consumer is another program, not a human: every line MUST be
-valid, single-line JSON with exactly the {"operation", "status", "detail"}
-shape the app expects, and the `Phase` context manager MUST NOT swallow an
-exception it's reporting -- a silently-eaten exception here would make a
-real failure look like a clean run to both the app and the caller of
-case_brief.py's main(). Not covered: the Streamlit-side consumer
-(app/progress.py) itself, which lives outside this project and needs a real
-Streamlit run to exercise meaningfully.
+The one thing that MUST hold regardless of formatting is that Phase never
+swallows an exception it's reporting -- a silently-eaten exception here
+would make a real failure look like a clean run to the caller of
+case_brief.py's main().
 
 Run with: python -m unittest discover -s tests -v   (from case-brief/)
       or: python -m pytest tests                     (if pytest is installed)
 """
 import contextlib
 import io
-import json
 import os
 import sys
 import unittest
@@ -34,35 +28,21 @@ def _captured_lines(fn, *args, **kwargs):
 
 
 class ProgressFunctionTests(unittest.TestCase):
-    def test_progress_prints_one_line_of_valid_json_with_the_expected_shape(self):
+    def test_running_status_has_no_prefix(self):
         lines = _captured_lines(progress, "Doing a thing")
-        self.assertEqual(len(lines), 1)
-        payload = json.loads(lines[0])
-        self.assertEqual(set(payload.keys()), {"operation", "status", "detail"})
-        self.assertEqual(payload["operation"], "Doing a thing")
-        self.assertEqual(payload["status"], "running")
-        self.assertEqual(payload["detail"], "")
+        self.assertEqual(lines, ["Doing a thing"])
 
-    def test_progress_success_sets_status_and_carries_the_detail_through(self):
+    def test_success_status_is_checkmark_prefixed_and_carries_detail(self):
         lines = _captured_lines(progress_success, "Loaded", "3 items")
-        payload = json.loads(lines[0])
-        self.assertEqual(payload["status"], "success")
-        self.assertEqual(payload["detail"], "3 items")
+        self.assertEqual(lines, ["✓ Loaded -- 3 items"])
 
-    def test_progress_error_sets_status_error(self):
+    def test_error_status_is_cross_prefixed_and_carries_detail(self):
         lines = _captured_lines(progress_error, "Failed", "connection refused")
-        payload = json.loads(lines[0])
-        self.assertEqual(payload["status"], "error")
-        self.assertEqual(payload["detail"], "connection refused")
+        self.assertEqual(lines, ["✗ Failed -- connection refused"])
 
-    def test_a_message_containing_special_characters_still_round_trips_as_json(self):
-        # Quotes/newlines/unicode in a detail string must not corrupt the
-        # line's JSON structure -- json.dumps handles this, but it's worth
-        # locking in given the consumer parses stdout line-by-line.
-        lines = _captured_lines(progress, "op", detail='has "quotes", a\nnewline, and é')
-        self.assertEqual(len(lines), 1)  # still exactly one line despite the embedded newline
-        payload = json.loads(lines[0])
-        self.assertEqual(payload["detail"], 'has "quotes", a\nnewline, and é')
+    def test_empty_detail_omits_the_separator_entirely(self):
+        lines = _captured_lines(progress_success, "Loaded")
+        self.assertEqual(lines, ["✓ Loaded"])
 
 
 class PhaseContextManagerTests(unittest.TestCase):
@@ -71,10 +51,8 @@ class PhaseContextManagerTests(unittest.TestCase):
         with contextlib.redirect_stdout(buf):
             with Phase("Loading demo data"):
                 pass
-        lines = [json.loads(l) for l in buf.getvalue().splitlines() if l]
-        self.assertEqual(len(lines), 2)
-        self.assertEqual(lines[0], {"operation": "Loading demo data...", "status": "running", "detail": ""})
-        self.assertEqual(lines[1], {"operation": "Loading demo data", "status": "success", "detail": ""})
+        lines = [l for l in buf.getvalue().splitlines() if l]
+        self.assertEqual(lines, ["Loading demo data...", "✓ Loading demo data"])
 
     def test_emits_running_then_error_with_the_exception_message_on_failure(self):
         buf = io.StringIO()
@@ -82,10 +60,8 @@ class PhaseContextManagerTests(unittest.TestCase):
             with contextlib.redirect_stdout(buf):
                 with Phase("Loading demo data"):
                     raise ValueError("bad data")
-        lines = [json.loads(l) for l in buf.getvalue().splitlines() if l]
-        self.assertEqual(len(lines), 2)
-        self.assertEqual(lines[0]["status"], "running")
-        self.assertEqual(lines[1], {"operation": "Loading demo data", "status": "error", "detail": "bad data"})
+        lines = [l for l in buf.getvalue().splitlines() if l]
+        self.assertEqual(lines, ["Loading demo data...", "✗ Loading demo data -- bad data"])
 
     def test_never_swallows_the_original_exception(self):
         # The whole point of __exit__ returning False -- confirm the actual
@@ -106,9 +82,9 @@ class PhaseContextManagerTests(unittest.TestCase):
         with contextlib.redirect_stdout(buf):
             with Phase("Step", detail="context info"):
                 pass
-        lines = [json.loads(l) for l in buf.getvalue().splitlines() if l]
-        self.assertEqual(lines[0]["detail"], "context info")
-        self.assertEqual(lines[1]["detail"], "")  # success line doesn't repeat the entry detail
+        lines = [l for l in buf.getvalue().splitlines() if l]
+        self.assertEqual(lines[0], "Step... -- context info")
+        self.assertEqual(lines[1], "✓ Step")  # success line doesn't repeat the entry detail
 
 
 if __name__ == "__main__":
