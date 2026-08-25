@@ -4,7 +4,8 @@ directly referenced from a CRM case.
 CRM notes/description/custom fields often already contain an actual link a
 support engineer pasted while working the case -- if one's there,
 parse_direct_references finds it and get_pull_request/get_branch resolve it
-with exactly one API call each.
+directly -- a repo lookup plus the PR/branch fetch itself, a couple of
+targeted API calls each.
 
 There is no broader org-wide search. This tool only ever talks to one org
 (ORG_URL below), so a "list every branch in every repo, in every project"

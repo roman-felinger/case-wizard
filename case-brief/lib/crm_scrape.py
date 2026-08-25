@@ -5,13 +5,9 @@ Trick: the Dataverse Web API lives on the *same origin* as the CRM UI itself.
 A same-origin fetch with credentials included rides on the page's own session
 cookie, the same way the CRM UI's own JavaScript calls that API internally.
 
-Two ways to find the case:
-  - By ticket number (lookup_by_ticket): works from ANY open, logged-in CRM
-    tab -- you don't need to navigate to the specific case yourself, just
-    have CRM open to something. This is the preferred path when you already
-    know the ticket number.
-  - By URL (find_case_tabs/extract): auto-detects whichever case you already
-    have open, for when you don't pass a ticket number at all.
+Always looked up by ticket number (lookup_by_ticket): works from ANY open,
+logged-in CRM tab -- you don't need to navigate to the specific case
+yourself, just have CRM open to something.
 
 Scrapes everything on the case, not a curated subset:
   - Every populated attribute on the incident record itself (no $select at
@@ -354,27 +350,3 @@ def lookup_by_ticket(page, ticket_number, ticket_field="ticketnumber"):
         return {"error": f"No case found with {ticket_field} = '{ticket_number}'.", "url": page.url}
 
     return _finish(page, origin, values[0])
-
-
-def find_case_tabs(pages, host_contains):
-    matches = []
-    for page in pages:
-        url = page.url
-        if any(h in url for h in host_contains) and "etn=incident" in url:
-            matches.append(page)
-    return matches
-
-
-def extract(page):
-    m = re.search(r"[?&]id=(?:%7B)?([0-9a-fA-F-]{36})", page.url)
-    if not m:
-        return {"error": "Could not find a case id in the tab URL.", "url": page.url}
-    incident_id = m.group(1)
-    origin = re.match(r"(https?://[^/]+)", page.url).group(1)
-    api_url = f"{origin}/api/data/v9.2/incidents({incident_id})"  # no $select -- see module docstring
-
-    result = page.evaluate(_FETCH_JS, api_url)
-    if result.get("__error"):
-        return {"error": result["__error"], "url": page.url}
-
-    return _finish(page, origin, result)

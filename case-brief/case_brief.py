@@ -2,10 +2,9 @@
 """Compile a support case's context into one Markdown brief opened in VS Code.
 
 Default flow needs no admin-approved app registration at all:
-  - CRM case: if you pass a ticket number, it's looked up directly via the
-    CRM API using ANY already-open, logged-in CRM tab as the auth bridge --
-    you don't need to find/open the specific case yourself. Omit the ticket
-    number and it'll auto-detect from a case you already have open instead.
+  - CRM case: looked up directly via the CRM API by ticket number, using
+    ANY already-open, logged-in CRM tab as the auth bridge -- you don't need
+    to find/open the specific case yourself.
   - Azure DevOps: related branches and PRs, via the real REST API using a
     self-service PAT (no admin approval needed for that one). Resolved
     directly from any ADO link already found in the CRM case (fast -- one
@@ -23,7 +22,6 @@ the flags.
 Examples:
     python case_brief.py T2611845                  # look up this case directly
     python case_brief.py T2611845 --skip-ado
-    python case_brief.py                           # auto-detect from an already-open CRM case tab
     python case_brief.py --demo                    # no browser/APIs, sample data
 """
 import argparse
@@ -90,8 +88,9 @@ def _collect_reference_text(crm_results):
 
 
 def run_ado_lookup(crm_results):
-    """Finds branches/PRs referenced directly in the CRM case (one API call
-    each, via ado_api.parse_direct_references). There is no broader
+    """Finds branches/PRs referenced directly in the CRM case (resolved
+    directly, a couple of targeted API calls each, via
+    ado_api.parse_direct_references). There is no broader
     org-wide search -- see lib/ado_api.py's module docstring for why --
     so if the case doesn't already link its own work, this comes back
     empty rather than searching for it.
@@ -178,45 +177,91 @@ def demo_data(case_number):
     return crm_results, branches, pull_requests
 
 
-def run_browser_scrape(case_number=None, keep_browser_open=False):
-    port, _ = browser.ensure_chrome(CHROME_CFG)
-
-    def ready(pages):
-        if case_number:
-            return any(crm_scrape.is_authenticated(t) for t in crm_scrape.find_authenticated_tabs(pages, CRM_HOST_CONTAINS))
-        return bool(crm_scrape.find_case_tabs(pages, CRM_HOST_CONTAINS))
-
-    if case_number:
-        message = "Waiting for you to sign into CRM in the automation Chrome window (any page there is fine)..."
-    else:
-        message = "Waiting for a CRM case tab to be open in the automation Chrome window..."
-
-    browser.wait_until_ready(port, ready, message)
-
-    pw, pages = browser.get_pages(port)
-    try:
-        if case_number:
-            auth_tabs = crm_scrape.find_authenticated_tabs(pages, CRM_HOST_CONTAINS)
-            auth_tab = next((t for t in auth_tabs if crm_scrape.is_authenticated(t)), None)
-            if not auth_tab:
-                crm_results = [{"error": "No authenticated CRM tab found.", "url": ""}]
-            else:
-                print(f"Looking up case {case_number} via the CRM API (using an already-open CRM tab for auth)...")
-                crm_results = [crm_scrape.lookup_by_ticket(auth_tab, case_number, TICKET_FIELD)]
-        else:
-            crm_tabs = crm_scrape.find_case_tabs(pages, CRM_HOST_CONTAINS)
-            print(f"Found {len(crm_tabs)} CRM case tab(s) open.")
-            crm_results = [crm_scrape.extract(p) for p in crm_tabs]
-    finally:
-        browser.close(pw)
-
-    # Remember this URL so the next cold launch (e.g. after you closed the
-    # window) reopens it automatically instead of leaving you to retype it.
+def _remember_crm_url(crm_results):
+    """Caches this run's CRM case URL so the next cold Chrome launch (or the
+    next headless staleness check below) has something to reopen/probe
+    instead of starting from nothing."""
     last_urls = browser.load_last_urls()
     if crm_results and not crm_results[0].get("error"):
         last_urls["crm"] = crm_results[0]["url"]
     if last_urls:
         browser.save_last_urls(last_urls)
+
+
+def _try_headless_scrape(cached_crm_url, case_number):
+    """Proactively checks whether the CRM session is still fresh using a
+    headless browser on the SAME profile -- reusing cookies left over from a
+    previous headed sign-in -- and if so, does the whole ticket lookup
+    headless, no window ever shown.
+
+    Any authenticated CRM tab is a valid auth bridge for the API lookup, so
+    landing on the cached case URL is enough -- we don't need it to still be
+    *that* case, just that origin. Returns the crm_results list on success,
+    or None if the session's stale/missing/anything went wrong -- callers
+    should treat None as "fall back to the headed sign-in flow", not as an
+    error.
+    """
+    try:
+        pw, context = browser.launch_headless_context(CHROME_CFG)
+    except Exception:
+        return None
+    try:
+        page = context.new_page()
+        try:
+            page.goto(cached_crm_url, wait_until="commit", timeout=15000)
+        except Exception:
+            return None
+        if not crm_scrape.is_authenticated(page):
+            return None
+        print("CRM session still valid -- looking up the case headlessly (no sign-in window needed)...")
+        return [crm_scrape.lookup_by_ticket(page, case_number, TICKET_FIELD)]
+    except Exception:
+        return None
+    finally:
+        browser.close_headless_context(pw, context)
+
+
+def run_browser_scrape(case_number, keep_browser_open=False):
+    # Proactive staleness check: only worth attempting when no headed instance
+    # already has the profile open (it would just fail to launch against a
+    # locked profile dir) and there's a cached CRM URL to probe. If there's no
+    # cached URL yet (e.g. first run ever), there's nothing to probe -- go
+    # straight to the headed flow below, same as always.
+    if not browser.is_chrome_running(CHROME_CFG):
+        cached_crm_url = browser.load_last_urls().get("crm")
+        if cached_crm_url:
+            crm_results = _try_headless_scrape(cached_crm_url, case_number)
+            if crm_results is not None:
+                _remember_crm_url(crm_results)
+                return crm_results
+            print("CRM session looks stale (or the check failed) -- opening the sign-in window instead...")
+
+    port, _ = browser.ensure_chrome(CHROME_CFG)
+
+    def ready(pages):
+        return any(crm_scrape.is_authenticated(t) for t in crm_scrape.find_authenticated_tabs(pages, CRM_HOST_CONTAINS))
+
+    browser.wait_until_ready(
+        port, ready,
+        "Waiting for you to sign into CRM in the automation Chrome window (any page there is fine)...",
+    )
+
+    pw, pages = browser.get_pages(port)
+    try:
+        auth_tabs = crm_scrape.find_authenticated_tabs(pages, CRM_HOST_CONTAINS)
+        auth_tab = next((t for t in auth_tabs if crm_scrape.is_authenticated(t)), None)
+        if not auth_tab:
+            crm_results = [{"error": "No authenticated CRM tab found.", "url": ""}]
+        else:
+            print(f"Looking up case {case_number} via the CRM API (using an already-open CRM tab for auth)...")
+            crm_results = [crm_scrape.lookup_by_ticket(auth_tab, case_number, TICKET_FIELD)]
+    finally:
+        browser.close(pw)
+
+    # Remember this URL so the next cold launch (e.g. after you closed the
+    # window), or the next headless staleness check above, has it to reopen
+    # or probe instead of starting from nothing.
+    _remember_crm_url(crm_results)
 
     if not keep_browser_open:
         print("Closing the automation Chrome window...")
@@ -231,7 +276,7 @@ def build_parser():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("case_number", nargs="?", help="CRM ticket number (optional -- auto-detected from an open CRM tab if omitted)")
+    parser.add_argument("case_number", nargs="?", help="CRM ticket number (required unless --demo or --skip-browser is used)")
 
     modes = parser.add_argument_group("modes")
     modes.add_argument("--demo", action="store_true", help="Use sample data, no network/browser/API calls")
@@ -247,7 +292,15 @@ def build_parser():
 
 
 def main():
-    args = build_parser().parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
+
+    # case_number is only optional for --demo (fake data) and --skip-browser
+    # (ADO-only, nothing to look up in CRM) -- the real browser-scrape path
+    # always needs a ticket to look up now that there's no more auto-detect
+    # from an already-open case tab.
+    if not args.demo and not args.skip_browser and not args.case_number:
+        parser.error("case_number is required (pass a ticket number, or use --demo / --skip-browser)")
 
     crm_results, branches, pull_requests, ado_error, ado_note = [], [], [], None, None
 

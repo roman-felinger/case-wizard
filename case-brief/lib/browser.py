@@ -118,6 +118,65 @@ def ensure_chrome(cfg):
     return port, True
 
 
+def is_chrome_running(cfg):
+    """True if a debuggable Chrome from a previous ensure_chrome call (or a
+    --keep-browser-open run) is still alive on this profile's debug port.
+
+    Callers use this to skip the headless staleness check below --
+    launch_persistent_context needs exclusive access to the profile dir and
+    will just fail if a headed instance already has it open, so there's no
+    point attempting it in that case.
+    """
+    return _cdp_alive(cfg.get("debug_port", 9222))
+
+
+def launch_headless_context(cfg, timeout=15000):
+    """Launches a headless browser against the SAME profile_dir the visible
+    automation Chrome uses, so a still-valid session (cookies left over from
+    a previous headed sign-in) can be reused without ever showing a window.
+    Used to proactively check whether the CRM session is still fresh before
+    deciding whether the headed sign-in window is actually needed this run.
+
+    Only call this when is_chrome_running(cfg) is False -- launch_persistent_
+    context needs exclusive access to the profile dir and raises if a headed
+    instance already has it open (matched by _cdp_alive rather than trying
+    and catching, so the caller can skip straight to the headed flow instead
+    of paying for a launch attempt that's guaranteed to fail).
+
+    Returns (playwright_handle, browser_context); close both together with
+    close_headless_context(). Raises on any launch failure (profile locked,
+    chrome.exe missing, etc.) -- callers should treat that the same as
+    "session not fresh" and fall back to the headed flow.
+    """
+    profile_dir = os.path.abspath(cfg.get("profile_dir", "./chrome-automation-profile"))
+    os.makedirs(profile_dir, exist_ok=True)
+    chrome_exe = find_chrome_exe(cfg.get("executable"))
+
+    pw = sync_playwright().start()
+    try:
+        context = pw.chromium.launch_persistent_context(
+            profile_dir,
+            executable_path=chrome_exe,
+            headless=True,
+            args=["--no-first-run", "--no-default-browser-check"],
+            timeout=timeout,
+        )
+    except Exception:
+        pw.stop()
+        raise
+    return pw, context
+
+
+def close_headless_context(pw, context):
+    """Counterpart to launch_headless_context -- releases the profile lock
+    (via context.close()) before stopping playwright, so a headed
+    ensure_chrome() right after this can open the same profile_dir cleanly."""
+    try:
+        context.close()
+    finally:
+        pw.stop()
+
+
 def wait_until_ready(port, check_fn, message, timeout=300, poll_interval=2):
     """Polls the automation Chrome until check_fn(pages) returns truthy --
     no keypress needed, just log in / open the tab over there and this

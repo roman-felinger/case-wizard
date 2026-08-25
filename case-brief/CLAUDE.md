@@ -8,13 +8,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ..\.venv\Scripts\Activate.ps1   # from case-brief/, on Windows -- repo root's venv has everything
 
 python case_brief.py --demo             # no browser/API calls, fake data — fastest way to check report.py changes
-python case_brief.py T2611845           # real run: CRM lookup by ticket number + ADO search
+python case_brief.py T2611845           # real run: CRM lookup by ticket number + ADO direct-reference resolution
 python case_brief.py --skip-browser     # ADO-only, no Chrome
 python case_brief.py -h                 # full flag list
 ```
 
 ```
-python -m unittest discover -s tests -v   # from case-brief/ -- 128 tests, mocked, no network
+python -m unittest discover -s tests -v   # from case-brief/ -- 122 tests, mocked, no network
 python -m pytest tests                    # equivalent, if pytest is installed
 ```
 
@@ -29,17 +29,27 @@ entirely.
 
 Two independent data sources are gathered, then merged into one Markdown report:
 
-1. **CRM (default path: browser scraping, `lib/crm_scrape.py`)** — `lib/browser.py`
-   launches a *separate*, dedicated Chrome profile (`chrome-automation-profile/`,
-   gitignored) via CDP on a fixed debug port (`case_brief.CHROME_CFG`), distinct
-   from your normal browsing profile. `case_brief.py::run_browser_scrape` polls
-   that profile's open tabs until
-   either a CRM tab is authenticated (ticket number given → API lookup via
-   `crm_scrape.lookup_by_ticket`, riding on that tab's own session — no app
-   registration needed) or a case tab is simply open (no ticket number → auto-detect
-   via `crm_scrape.extract`). The window is closed by the script itself at the end of
-   every run — sessions don't persist between runs by design, but the last-used
-   CRM URL is cached to `.last_urls.json` so it reopens automatically next time.
+1. **CRM (default path: browser scraping, `lib/crm_scrape.py`)** — always by ticket
+   number now (no auto-detect from an already-open case tab — that path was cut for
+   being a confusing second mode; `case_number` is a required CLI arg for a real
+   browser-scrape run). `case_brief.py::run_browser_scrape` first tries a headless,
+   no-window pass (`browser.launch_headless_context`, `case_brief._try_headless_scrape`):
+   if `.last_urls.json` has a CRM URL from a previous run and no headed instance is
+   already running, it launches headless against the SAME profile dir (reusing
+   whatever cookies a previous headed sign-in left there), navigates to that URL, and
+   checks `crm_scrape.is_authenticated`. A fresh session does the whole
+   `lookup_by_ticket` right there, headless. Anything else (no cached URL yet, session
+   expired, launch failed) falls back to the original headed flow: `lib/browser.py`
+   launches a *separate*, dedicated, visible-but-minimized Chrome profile
+   (`chrome-automation-profile/`, gitignored) via CDP on a fixed debug port
+   (`case_brief.CHROME_CFG`), distinct from your normal browsing profile, and
+   `run_browser_scrape` polls that profile's open tabs until a CRM tab is
+   authenticated, then looks the ticket up via `crm_scrape.lookup_by_ticket`, riding
+   on that tab's own session — no app registration needed either way. The headed
+   window is closed by the script itself at the end of every run it opened one, but
+   the last-used CRM URL is always cached to `.last_urls.json`, both so a cold headed
+   launch reopens it automatically and so the next run's headless check has
+   something to probe.
 
    Scrapes the whole case, not a curated subset: the incident record is fetched with
    no `$select` at all (Dataverse returns every populated attribute when it's
@@ -69,8 +79,9 @@ Two independent data sources are gathered, then merged into one Markdown report:
    flattens everything CRM scraping just found (title, description, every extra
    field, every note, every activity — see `_collect_reference_text`) and scans it
    via `ado_api.parse_direct_references` for actual ADO PR/branch links a support
-   engineer pasted while working the case. Any found are resolved with one targeted
-   API call each (`get_pull_request` / `get_branch`) — no searching. There is no
+   engineer pasted while working the case. Any found are resolved directly
+   (`get_pull_request` / `get_branch`, a repo lookup plus the PR/branch fetch itself
+   -- a couple of targeted API calls each) — no searching. There is no
    broader org-wide search (an earlier "list every branch in every repo, in every
    project" fallback was removed -- see `lib/ado_api.py`'s module docstring): this
    tool only ever talks to one org (`ado_api.ORG_URL`, fixed), and a case that never

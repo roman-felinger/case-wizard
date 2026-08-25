@@ -336,15 +336,6 @@ class FindTabsTests(unittest.TestCase):
         result = crm_scrape.find_authenticated_tabs(pages, ["dynamics.com"])
         self.assertEqual(result, [pages[0]])
 
-    def test_find_case_tabs_requires_both_host_and_incident_marker(self):
-        pages = [
-            FakePage("https://a.dynamics.com/main.aspx?etn=incident&id=1"),
-            FakePage("https://a.dynamics.com/main.aspx?etn=account&id=2"),  # right host, wrong entity
-            FakePage("https://other.example.com/?etn=incident&id=3"),       # right entity, wrong host
-        ]
-        result = crm_scrape.find_case_tabs(pages, ["dynamics.com"])
-        self.assertEqual(result, [pages[0]])
-
 
 class IsAuthenticatedTests(unittest.TestCase):
     def test_true_when_the_whoami_call_succeeds(self):
@@ -422,49 +413,6 @@ class LookupByTicketTests(unittest.TestCase):
         self.assertEqual(len(result["activities"]), 1)
         self.assertEqual(result["all_fields"], [])
 
-
-class ExtractTests(unittest.TestCase):
-    def setUp(self):
-        crm_scrape.reset_metadata_cache()
-
-    def test_extracts_a_plain_guid_from_the_url(self):
-        page = FakePage(
-            "https://org.crm.dynamics.com/main.aspx?pagetype=entityrecord&etn=incident&id=11111111-1111-1111-1111-111111111111",
-            routes=_routes_for({"incidentid": "11111111-1111-1111-1111-111111111111", "ticketnumber": "T1"}),
-        )
-        result = crm_scrape.extract(page)
-        self.assertEqual(result["ticket_number"], "T1")
-
-    def test_extracts_a_percent7b_encoded_guid_from_the_url(self):
-        page = FakePage(
-            "https://org.crm.dynamics.com/main.aspx?etn=incident&id=%7B22222222-2222-2222-2222-222222222222%7D",
-            routes=_routes_for({"incidentid": "22222222-2222-2222-2222-222222222222"}),
-        )
-        result = crm_scrape.extract(page)
-        self.assertNotIn("error", result)
-
-    def test_no_id_in_the_url_returns_an_error_without_calling_evaluate(self):
-        page = FakePage("https://org.crm.dynamics.com/main.aspx?etn=incident")
-        result = crm_scrape.extract(page)
-        self.assertIn("error", result)
-        self.assertIsNone(page.last_eval_arg)
-
-    def test_fetch_error_on_the_main_query_is_surfaced_as_an_error_result(self):
-        page = FakePage(
-            "https://org.crm.dynamics.com/main.aspx?etn=incident&id=11111111-1111-1111-1111-111111111111",
-            eval_result={"__error": "HTTP 500"},
-        )
-        result = crm_scrape.extract(page)
-        self.assertEqual(result["error"], "HTTP 500")
-
-    def test_select_is_not_present_in_the_request_url(self):
-        page = FakePage(
-            "https://org.crm.dynamics.com/main.aspx?etn=incident&id=11111111-1111-1111-1111-111111111111",
-            routes=_routes_for({"incidentid": "11111111-1111-1111-1111-111111111111"}),
-        )
-        crm_scrape.extract(page)
-        self.assertNotIn("$select", page.eval_calls[0])
-        self.assertNotIn("$expand", page.eval_calls[0])
 
 
 if __name__ == "__main__":
