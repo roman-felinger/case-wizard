@@ -12,12 +12,13 @@ Default flow needs no admin-approved app registration at all:
     API call each). There is no broader org-wide search -- see
     lib/ado_api.py's module docstring for why.
 
-The org URL, PAT env var, CRM ticket field, CRM host pattern, and output
-directory are all fixed (see the constants below) -- this tool only ever
-talks to one org and one CRM, so making those configurable added a config
-surface nobody ever actually needed to touch. config.json (optional) only
-covers the Chrome automation profile; everything else is a CLI flag or
-fixed. Run with -h to see the flags.
+The org URL, PAT env var, CRM ticket field, CRM host pattern, output
+directory, and Chrome profile/port are all fixed (see the constants below)
+-- this tool only ever talks to one org, one CRM, and its own dedicated
+Chrome profile, so making any of that configurable added surface nobody
+ever actually needed to touch. There is no config.json at all -- every
+setting here is either a CLI flag or a fixed constant. Run with -h to see
+the flags.
 
 Examples:
     python case_brief.py T2611845                  # look up this case directly
@@ -26,8 +27,6 @@ Examples:
     python case_brief.py --demo                    # no browser/APIs, sample data
 """
 import argparse
-import copy
-import json
 import os
 import sys
 
@@ -40,45 +39,22 @@ enable_utf8_console()  # this script prints Unicode; see shared/console.py
 
 from lib import ado_api, browser, crm_scrape, report
 from lib.progress import progress, progress_success, progress_error
-from shared.config import deep_merge, strip_comments
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(HERE, "config.json")
 
-# This tool only ever talks to one Dynamics 365 org, so these never actually
-# vary -- not worth a config setting or CLI flag. (Azure DevOps's own
-# org URL/PAT env var equivalents live in lib/ado_api.py.)
+# This tool only ever talks to one Dynamics 365 org via its own dedicated
+# Chrome automation profile, so none of this actually varies -- not worth a
+# config file or CLI flag. (Azure DevOps's own org URL/PAT env var
+# equivalents live in lib/ado_api.py.) If chrome.exe isn't found
+# automatically, set CHROME_CFG["executable"] below to its full path.
 TICKET_FIELD = "ticketnumber"
 CRM_HOST_CONTAINS = ["dynamics.com"]
 OUTPUT_DIR = "./case-briefs"
-
-DEFAULTS = {
-    "chrome": {
-        "profile_dir": "./chrome-automation-profile",
-        "debug_port": 9222,
-        "executable": None,
-    },
+CHROME_CFG = {
+    "profile_dir": "./chrome-automation-profile",
+    "debug_port": 9222,
+    "executable": None,
 }
-
-
-def load_config(path=CONFIG_PATH):
-    """Starts from DEFAULTS, layers config.json over it if present. Nothing
-    here is required -- config.json existing at all is optional, and every
-    field can also be set via a command-line flag (see apply_cli_overrides),
-    which wins over both."""
-    cfg = copy.deepcopy(DEFAULTS)
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            deep_merge(cfg, json.load(f))
-    return strip_comments(cfg)
-
-
-def apply_cli_overrides(cfg, args):
-    if args.chrome_profile_dir:
-        cfg["chrome"]["profile_dir"] = args.chrome_profile_dir
-    if args.chrome_port:
-        cfg["chrome"]["debug_port"] = args.chrome_port
-    return cfg
 
 
 def _collect_reference_text(crm_results):
@@ -202,10 +178,8 @@ def demo_data(case_number):
     return crm_results, branches, pull_requests
 
 
-def run_browser_scrape(cfg, case_number=None, keep_browser_open=False):
-    chrome_cfg = cfg["chrome"]
-
-    port, _ = browser.ensure_chrome(chrome_cfg)
+def run_browser_scrape(case_number=None, keep_browser_open=False):
+    port, _ = browser.ensure_chrome(CHROME_CFG)
 
     def ready(pages):
         if case_number:
@@ -246,7 +220,7 @@ def run_browser_scrape(cfg, case_number=None, keep_browser_open=False):
 
     if not keep_browser_open:
         print("Closing the automation Chrome window...")
-        browser.close_chrome_window(chrome_cfg)
+        browser.close_chrome_window(CHROME_CFG)
 
     return crm_results
 
@@ -269,20 +243,11 @@ def build_parser():
         help="Don't close the automation Chrome window when done (default: close it).",
     )
 
-    chrome = parser.add_argument_group("chrome (override config.json's chrome.*)")
-    chrome.add_argument("--chrome-profile-dir", metavar="DIR", help="Dedicated Chrome profile directory (default: ./chrome-automation-profile)")
-    chrome.add_argument("--chrome-port", type=int, metavar="PORT", help="Chrome remote-debugging port (default: 9222)")
-
-    misc = parser.add_argument_group("misc")
-    misc.add_argument("--config", metavar="PATH", default=CONFIG_PATH, help="Path to config.json (default: ./config.json)")
-
     return parser
 
 
 def main():
     args = build_parser().parse_args()
-    cfg = load_config(args.config)
-    apply_cli_overrides(cfg, args)
 
     crm_results, branches, pull_requests, ado_error, ado_note = [], [], [], None, None
 
@@ -295,7 +260,7 @@ def main():
             if not args.skip_browser:
                 progress("Connecting to automation Chrome window...", status="running")
                 crm_results = run_browser_scrape(
-                    cfg, case_number=args.case_number,
+                    case_number=args.case_number,
                     keep_browser_open=args.keep_browser_open,
                 )
                 progress_success("CRM data extracted", f"Found {len(crm_results)} cases")

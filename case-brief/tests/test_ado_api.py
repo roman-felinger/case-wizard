@@ -6,7 +6,7 @@ being a near-namesake, case-brief's ado_api.py is NOT the same
 implementation. It calls the bare `requests.get` function directly (no
 `requests.Session`), and it has no `AdoAuthError` class, no `_get_json`/
 `_get_or` raise-vs-swallow helpers, no org-wide search, and no
-`get_recent_prs`/`get_pr_details` -- those only exist in case-guide's copy.
+`get_pr_details` -- that only exists in case-guide's copy.
 A 401/403 here just raises the plain `requests.HTTPError` from
 `raise_for_status()` like any other HTTP error; nothing here specifically
 detects or reports auth failures differently, and callers (case_brief.py)

@@ -1,82 +1,23 @@
-"""Unit tests for case_brief.py's pure-logic, security/correctness-sensitive
-pieces: the config merge order (DEFAULTS -> config.json -> CLI flags,
-apply_cli_overrides/load_config, now just the Chrome profile) and
-run_ado_lookup's direct-reference resolution.
+"""Unit tests for case_brief.py's pure-logic pieces: run_ado_lookup's
+direct-reference resolution and _collect_reference_text's text-flattening.
 
 Deliberately not exhaustive over every CLI flag or every branch of
 build_parser/main -- those are low-risk plumbing, easily eyeballed with
-`--demo`-style manual runs. This file locks in the handful of things that
-would otherwise fail silently and misleadingly: a CLI flag that should win
-over config.json but doesn't (or vice versa), a config-merge that clobbers a
-whole sub-dict instead of merging it, and a direct ADO reference that
-resolves (or fails to) correctly.
+`--demo`-style manual runs. There is no config file at all here (org URL,
+CRM ticket field/host pattern, Chrome profile -- all fixed constants; see
+case_brief.py's module docstring), so there's no config-merge precedence
+left to test the way case-guide/case-solve still have.
 
 Run with: python -m unittest discover -s tests -v   (from case-brief/)
       or: python -m pytest tests                     (if pytest is installed)
 """
-import copy
 import os
 import sys
-import tempfile
-import types
 import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import case_brief as cb
-
-
-def make_args(**overrides):
-    """A minimal argparse.Namespace stand-in with every field
-    apply_cli_overrides reads, defaulting to the "flag not passed" value
-    (None/False) unless overridden."""
-    defaults = dict(
-        case_number=None, demo=False, skip_ado=False, skip_browser=False,
-        no_open=False, chrome_profile_dir=None, chrome_port=None,
-    )
-    defaults.update(overrides)
-    return types.SimpleNamespace(**defaults)
-
-
-class LoadConfigTests(unittest.TestCase):
-    def test_defaults_used_when_config_file_is_absent(self):
-        missing_path = os.path.join(tempfile.gettempdir(), "definitely-does-not-exist-cb.json")
-        cfg = cb.load_config(missing_path)
-        self.assertEqual(cfg, cb.DEFAULTS)
-        # Make sure it's a real copy, not the live DEFAULTS dict itself --
-        # mutating cfg must never leak back into DEFAULTS for the next call.
-        cfg["chrome"]["profile_dir"] = "changed"
-        self.assertNotEqual(cb.DEFAULTS["chrome"]["profile_dir"], "changed")
-
-    def test_config_json_overrides_only_the_keys_it_sets(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "config.json")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write('{"chrome": {"debug_port": 9999}}')
-            cfg = cb.load_config(path)
-        self.assertEqual(cfg["chrome"]["debug_port"], 9999)
-        # Sibling keys in the same sub-dict must survive the merge untouched --
-        # a naive `cfg[key] = value` on the whole "chrome" dict would have
-        # wiped these out instead of merging one level deeper.
-        self.assertEqual(cfg["chrome"]["profile_dir"], cb.DEFAULTS["chrome"]["profile_dir"])
-        self.assertEqual(cfg["chrome"]["executable"], cb.DEFAULTS["chrome"]["executable"])
-
-
-class ApplyCliOverridesTests(unittest.TestCase):
-    def test_cli_flags_win_over_config_json_values(self):
-        cfg = copy.deepcopy(cb.DEFAULTS)
-        cfg["chrome"]["profile_dir"] = "./from-config"
-        args = make_args(chrome_profile_dir="./from-cli", chrome_port=9999)
-        cb.apply_cli_overrides(cfg, args)
-        self.assertEqual(cfg["chrome"]["profile_dir"], "./from-cli")
-        self.assertEqual(cfg["chrome"]["debug_port"], 9999)
-
-    def test_unset_cli_flags_leave_config_values_alone(self):
-        cfg = copy.deepcopy(cb.DEFAULTS)
-        cfg["chrome"]["profile_dir"] = "./from-config"
-        args = make_args()  # nothing passed on the CLI
-        cb.apply_cli_overrides(cfg, args)
-        self.assertEqual(cfg["chrome"]["profile_dir"], "./from-config")
 
 
 class CollectReferenceTextTests(unittest.TestCase):

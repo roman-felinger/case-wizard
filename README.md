@@ -39,8 +39,10 @@ python case-guide/case_guide.py T2611845
 python case-solve/case_solve.py T2611845 --repo https://dev.azure.com/org/proj/_git/repo
 ```
 
-`config.json` in each stage directory (see its `config.example.json`) is optional —
-every setting there also has a CLI flag override.
+case-guide and case-solve each optionally take a `config.json` (see their
+`config.example.json`) for settings without a CLI flag. case-brief has no config
+file at all — it only ever talks to one org, one CRM, and its own dedicated
+Chrome profile, all fixed constants in its source.
 
 ## The Three Stages
 

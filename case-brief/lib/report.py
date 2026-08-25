@@ -52,8 +52,9 @@ def _sanitize_freetext_for_markdown(text):
 # Description, in this order, instead of getting buried in the generic
 # "Other CRM Fields" dump at the bottom -- see build_markdown's
 # `promoted_fields` param. Matched by logical_name (stable across a field's
-# display label changing), overridable via config.json's
-# `crm_promoted_fields` (case_brief.py's DEFAULTS).
+# display label changing). Fixed here, not configurable -- case-brief has
+# no config file (see case_brief.py's module docstring); a caller that
+# needs a different set can still pass its own `promoted_fields` directly.
 DEFAULT_PROMOTED_FIELDS = [
     "art_internaldescriptionandnotes",  # "Interní popis & poznámky"
     "art_additionalpublicdescription",  # "Dodatečný veřejný popis"

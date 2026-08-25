@@ -14,7 +14,7 @@ python case_brief.py -h                 # full flag list
 ```
 
 ```
-python -m unittest discover -s tests -v   # from case-brief/ -- 154 tests, mocked, no network
+python -m unittest discover -s tests -v   # from case-brief/ -- 128 tests, mocked, no network
 python -m pytest tests                    # equivalent, if pytest is installed
 ```
 
@@ -31,8 +31,9 @@ Two independent data sources are gathered, then merged into one Markdown report:
 
 1. **CRM (default path: browser scraping, `lib/crm_scrape.py`)** — `lib/browser.py`
    launches a *separate*, dedicated Chrome profile (`chrome-automation-profile/`,
-   gitignored) via CDP on `chrome.debug_port`, distinct from your normal browsing
-   profile. `case_brief.py::run_browser_scrape` polls that profile's open tabs until
+   gitignored) via CDP on a fixed debug port (`case_brief.CHROME_CFG`), distinct
+   from your normal browsing profile. `case_brief.py::run_browser_scrape` polls
+   that profile's open tabs until
    either a CRM tab is authenticated (ticket number given → API lookup via
    `crm_scrape.lookup_by_ticket`, riding on that tab's own session — no app
    registration needed) or a case tab is simply open (no ticket number → auto-detect
@@ -92,13 +93,12 @@ the `ado_rendered` guard) -- it's whole-run data, not per-case, so it's rendered
 even with multiple CRM results, with a fallback render at the end for when no case
 rendered at all (no CRM tab open, or every result errored).
 
-**Config merge order** (`load_config` → `apply_cli_overrides`): `DEFAULTS` dict →
-`config.json` (deep-merged) → CLI flags, each layer overriding the previous.
-`config.json` only covers the Chrome automation profile now -- the Azure DevOps org
-URL/PAT env var, CRM ticket field, CRM host pattern, and output directory are all
-fixed constants (`ado_api.ORG_URL`/`ado_api.PAT_ENV_VAR`, `case_brief.TICKET_FIELD`/
-`CRM_HOST_CONTAINS`/`OUTPUT_DIR`) since this tool only ever runs against one org and
-one CRM -- making them configurable was surface nobody ever touched.
+**No config file.** Everything is either a CLI flag or a fixed constant now: the
+Azure DevOps org URL/PAT env var (`ado_api.ORG_URL`/`ado_api.PAT_ENV_VAR`), CRM
+ticket field/host pattern, output directory, and Chrome profile/port/executable
+(`case_brief.TICKET_FIELD`/`CRM_HOST_CONTAINS`/`OUTPUT_DIR`/`CHROME_CFG`) --
+this tool only ever runs against one org, one CRM, and its own dedicated Chrome
+profile, so a config.json would have had nothing left worth putting in it.
 
 `lib/report.py` is the only place that renders the final Markdown and writes/opens it
 in VS Code — CRM and ADO results are plain dicts/lists by the time they reach it,

@@ -48,7 +48,8 @@ def find_chrome_exe(configured_path=None):
             return path
     raise RuntimeError(
         "Could not find chrome.exe in the usual locations. "
-        "Set chrome.executable in config.json to its full path."
+        "Add it to CHROME_CANDIDATES in lib/browser.py, or set case_brief.py's "
+        "CHROME_CFG[\"executable\"] to its full path."
     )
 
 

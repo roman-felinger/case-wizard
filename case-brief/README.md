@@ -45,10 +45,10 @@ Output: `case-briefs/case-<number>.md`
 
 ## Config
 
-The Azure DevOps org, CRM ticket field, and CRM host pattern are all fixed
-in `case_brief.py`/`lib/ado_api.py` — this tool only ever talks to one org
-and one CRM. `config.json` (optional, see `config.example.json`) only
-covers the Chrome automation profile.
+No config file. The Azure DevOps org, CRM ticket field, CRM host pattern, and
+Chrome automation profile/port are all fixed constants in `case_brief.py` /
+`lib/ado_api.py` — this tool only ever talks to one org, one CRM, and its own
+dedicated Chrome profile, so there was nothing left worth making configurable.
 
 ## Status
 
