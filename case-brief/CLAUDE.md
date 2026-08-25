@@ -53,45 +53,37 @@ Two independent data sources are gathered, then merged into one Markdown report:
    Activity Timeline (phone calls, emails, tasks) live in separate Dataverse entities
    (`annotation` / `activitypointer`) and are fetched separately
    (`crm_scrape.get_notes` / `get_activities`), each capped (`NOTES_TOP` /
-   `ACTIVITIES_TOP`) with truncation surfaced rather than silently dropped, same
-   pattern as ADO's `max_prs`.
+   `ACTIVITIES_TOP`) with truncation surfaced rather than silently dropped.
 
    Most of those "get everything" fields are org-specific noise most of the time,
    so `report.build_markdown`'s `promoted_fields` param (default:
-   `report.DEFAULT_PROMOTED_FIELDS`, overridable via config.json's
-   `crm_promoted_fields`) pulls specific fields out by `logical_name` into their
-   own proper subsection right after Description — everything else lands in an
-   uncurated "Other CRM Fields" section at the very bottom of the brief instead
-   of cluttering the top.
+   `report.DEFAULT_PROMOTED_FIELDS`, fixed -- not configurable, since this scrapes
+   one CRM whose custom fields don't change) pulls specific fields out by
+   `logical_name` into their own proper subsection right after Description —
+   everything else lands in an uncurated "Other CRM Fields" section at the very
+   bottom of the brief instead of cluttering the top.
 
 2. **Azure DevOps (`lib/ado_api.py`)** — real REST API via a self-service PAT
-   (`AZDO_PAT` env var by default). Two ways to find related branches/PRs, in order:
+   (`AZDO_PAT` env var, fixed -- see `ado_api.PAT_ENV_VAR`). `case_brief.py::run_ado_lookup`
+   flattens everything CRM scraping just found (title, description, every extra
+   field, every note, every activity — see `_collect_reference_text`) and scans it
+   via `ado_api.parse_direct_references` for actual ADO PR/branch links a support
+   engineer pasted while working the case. Any found are resolved with one targeted
+   API call each (`get_pull_request` / `get_branch`) — no searching. There is no
+   broader org-wide search (an earlier "list every branch in every repo, in every
+   project" fallback was removed -- see `lib/ado_api.py`'s module docstring): this
+   tool only ever talks to one org (`ado_api.ORG_URL`, fixed), and a case that never
+   mentions its own work either doesn't have any yet or is faster to ask about than
+   to brute-force search for.
 
-   - **Direct (default)** — `case_brief.py::run_ado_lookup` flattens everything CRM
-     scraping just found (title, description, every extra field, every note, every
-     activity — see `_collect_reference_text`) and scans it via
-     `ado_api.parse_direct_references` for actual ADO PR/branch links a support
-     engineer pasted while working the case. Any found are resolved with one targeted
-     API call each (`get_pull_request` / `get_branch`) — no searching.
-   - **Broad search (opt-in fallback, `--search-ado` / `azure_devops.broad_search`)**
-     — only runs when no direct link was found. `ado_api.find_related` fetches
-     candidates (all repos' branches, recent PRs per project, across every project
-     unless `azure_devops.project` is set) and filters client-side for the case
-     number appearing in the name/title/description. This is the expensive path —
-     an org with many projects/repos means many API calls — which is why it's no
-     longer the default; it used to run unconditionally and was the main source of
-     a slow `case_brief.py` run. Truncation (`max_prs` cap) is still surfaced to the
-     report rather than silently dropped (`prs_truncated`/`max_prs` threaded through
-     to `report.build_markdown`).
-
-   Either way, `report.build_markdown`'s `ado_note` param carries a plain-language
-   summary of which path ran and what it found/skipped.
+   `report.build_markdown`'s `ado_note` param carries a plain-language summary of
+   what the direct-reference lookup found/skipped.
 
 The brief no longer suggests a repo to clone/branch commands for -- that guess
-(fuzzy-matching the CRM customer name against ADO project/repo names, or a
-`customer_repo_map` override) moved to case-guide, which is the thing that actually
-needs it (see case-guide/CLAUDE.md's "Repo suggestion"); case-brief's job is just the
-facts (CRM + any directly-linked ADO work), not a guessed next step.
+(fuzzy-matching the CRM customer name against ADO project/repo names) moved to
+case-guide, which is the thing that actually needs it (see case-guide/CLAUDE.md's
+"Repo suggestion"); case-brief's job is just the facts (CRM + any directly-linked
+ADO work), not a guessed next step.
 
 **Azure DevOps section placement** -- `report.build_markdown` renders it right after a
 case's at-a-glance details (Ticket #/Customer/.../Created), before Description/Notes/
@@ -101,9 +93,12 @@ even with multiple CRM results, with a fallback render at the end for when no ca
 rendered at all (no CRM tab open, or every result errored).
 
 **Config merge order** (`load_config` → `apply_cli_overrides`): `DEFAULTS` dict →
-`config.json` (deep-merged) → CLI flags, each layer overriding the previous. Every
-setting is reachable by either config.json or a flag; there is no setting that
-requires editing config.json.
+`config.json` (deep-merged) → CLI flags, each layer overriding the previous.
+`config.json` only covers the Chrome automation profile now -- the Azure DevOps org
+URL/PAT env var, CRM ticket field, CRM host pattern, and output directory are all
+fixed constants (`ado_api.ORG_URL`/`ado_api.PAT_ENV_VAR`, `case_brief.TICKET_FIELD`/
+`CRM_HOST_CONTAINS`/`OUTPUT_DIR`) since this tool only ever runs against one org and
+one CRM -- making them configurable was surface nobody ever touched.
 
 `lib/report.py` is the only place that renders the final Markdown and writes/opens it
 in VS Code — CRM and ADO results are plain dicts/lists by the time they reach it,

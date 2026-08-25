@@ -52,14 +52,6 @@ class BuildMarkdownMinimalInputTests(unittest.TestCase):
         self.assertNotIn("[P/R: b]", md)
         self.assertNotIn("!1", md)
 
-    def test_prs_truncated_note_appears_only_when_flagged(self):
-        md_truncated = report.build_markdown("T1", [], [], [{"project": "P", "repo": "R", "id": 1, "title": "t",
-                                                              "status": "active", "created_by": "x", "url": "u"}],
-                                              prs_truncated=True, max_prs=50)
-        self.assertIn("Only searched the 50 most recent pull requests", md_truncated)
-        md_not_truncated = report.build_markdown("T1", [], [], [], prs_truncated=False)
-        self.assertNotIn("Only searched", md_not_truncated)
-
 
 class BuildMarkdownCrmSectionTests(unittest.TestCase):
     def test_crm_error_result_is_flagged_with_a_warning_not_rendered_as_a_case(self):

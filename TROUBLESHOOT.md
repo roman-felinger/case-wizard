@@ -27,12 +27,12 @@ pass `--keep-browser-open`.
 
 ## Azure DevOps errors (case-brief, case-guide)
 
-1. Check the org URL format: `https://dev.azure.com/yourorg` (pass via `--org-url`
-   or `azure_devops.org_url` in that stage's `config.json`).
-2. Check the `AZDO_PAT` environment variable is set and hasn't expired (PATs max out
-   at 1 year), with scopes **Code (Read)** and **Project and Team (Read)**. Create a
-   new one at `https://dev.azure.com/yourorg/_usersSettings/tokens` if needed.
-3. A different PAT env var name can be set via `--pat-env-var` / `azure_devops.pat_env_var`.
+Both tools are hardcoded to one org (`https://dev.azure.com/artexis` in
+case-brief's `lib/ado_api.py`; case-guide still takes `--org-url` if you ever
+need a different one for a run). Check the `AZDO_PAT` environment variable is
+set and hasn't expired (PATs max out at 1 year), with scopes **Code (Read)**
+and **Project and Team (Read)**. Create a new one at
+`https://dev.azure.com/yourorg/_usersSettings/tokens` if needed.
 
 ## A stage fails
 

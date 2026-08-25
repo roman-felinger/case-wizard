@@ -60,7 +60,7 @@ DEFAULT_PROMOTED_FIELDS = [
 ]
 
 
-def _ado_section_lines(ado_error, ado_note, branches, pull_requests, prs_truncated, max_prs):
+def _ado_section_lines(ado_error, ado_note, branches, pull_requests):
     """The '## Azure DevOps' section's lines, as its own helper so
     build_markdown can slot it in right after a case's core details (see the
     "pulled up to the details" placement below) instead of building it
@@ -85,21 +85,17 @@ def _ado_section_lines(ado_error, ado_note, branches, pull_requests, prs_truncat
     else:
         for pr in pull_requests:
             lines.append(f"- [{pr['project']}/{pr['repo']} !{pr['id']}]({pr['url']}) — {pr.get('title')} ({pr.get('status')}, by {pr.get('created_by') or '—'})")
-    if prs_truncated:
-        lines.append("")
-        lines.append(f"_Only searched the {max_prs} most recent pull requests per project (--max-prs to widen) -- an older one could be missed._")
     return lines
 
 
 def build_markdown(case_number, crm_results, branches, pull_requests,
-                    ado_error=None, ado_note=None, prs_truncated=False, max_prs=None,
-                    promoted_fields=None):
+                    ado_error=None, ado_note=None, promoted_fields=None):
     if promoted_fields is None:
         promoted_fields = DEFAULT_PROMOTED_FIELDS
 
     lines = [f"# Case {case_number}", ""]
     leftover_by_case = []  # [(case, [field, ...]), ...] -- rendered at the bottom, see below
-    ado_lines = _ado_section_lines(ado_error, ado_note, branches, pull_requests, prs_truncated, max_prs)
+    ado_lines = _ado_section_lines(ado_error, ado_note, branches, pull_requests)
     ado_rendered = False  # the Azure DevOps section is whole-run, not per-case -- render it once
 
     if not crm_results:
