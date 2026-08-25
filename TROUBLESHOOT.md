@@ -12,9 +12,10 @@ The app tells you exactly what's missing and links to the installer. After fixin
 
 ## CRM shows not logged in
 
-The app checks this via its own dedicated Chromium window (`app/.crm_profile/`) —
-**not** your regular browser, since modern browsers block external tools from
-reading their session cookies (an anti-malware protection, not a bug on our end).
+The app checks this via case-brief's own dedicated Chromium window
+(`case-brief/chrome-automation-profile/`) — **not** your regular browser, since
+modern browsers block external tools from reading their session cookies (an
+anti-malware protection, not a bug on our end).
 
 1. Click **🔑 Log in to CRM** — a real browser window opens.
 2. Log in there. It detects success and closes itself automatically — no need to

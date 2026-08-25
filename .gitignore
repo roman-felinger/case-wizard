@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 .venv/.pip-installed
 *.egg-info/
+.pytest_cache/
 
 # Config & secrets
 */config.json
@@ -11,7 +12,6 @@ __pycache__/
 case-brief/.token_cache/
 case-brief/.last_urls.json
 case-brief/chrome-automation-profile/
-app/.crm_profile/
 
 # Generated output
 case-brief/case-briefs/*.md

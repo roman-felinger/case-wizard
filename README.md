@@ -81,11 +81,12 @@ explicitly rather than relying on a stage's local config file.
 
 ## Status
 
-- **Brief:** CRM + ADO working
-- **Guide:** stable, has a 63-test suite (`case-guide/tests/`)
-- **Solve:** MVP — clone/branch/dependency-install verified; a real end-to-end Claude
-  implementation run against a live repo is the main thing left to exercise
+- **Brief:** CRM + ADO working, 154 tests (`case-brief/tests/`)
+- **Guide:** stable, 94 tests (`case-guide/tests/`)
+- **Solve:** MVP — clone/branch/dependency-install verified, 144 tests
+  (`case-solve/tests/`); a real end-to-end Claude implementation run against a live
+  repo is the main thing left to exercise
 - **App:** Streamlit desktop UI; auto-shuts-down ~15s after the last browser tab
-  closes
+  closes, 97 tests (`app/tests/`)
 
 See `TROUBLESHOOT.md` if something's red and you're not sure why.
