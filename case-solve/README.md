@@ -31,7 +31,7 @@ answer either one.
 
 Requires:
 - A guide already written by `case-guide` (reads
-  `../case-guide/case-guides/case-<code>-for-dummies.md`)
+  `../case-guide/case-guides/case-<code>.md`)
 - Claude CLI (`claude` on PATH, logged in)
 - Git configured
 - Network access to clone the repo

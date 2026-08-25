@@ -139,7 +139,7 @@ independently of `case_guide.py`; its Markdown body is the actual system prompt.
    pure text generation with everything already inlined — a
    `subprocess.run(..., timeout=...)` is still there as a safety net in case an
    unexpected permission prompt ever hangs it.
-8. `_looks_like_guide` is a loose sanity check (leading `#`, "for dummies" in the
+8. `_looks_like_guide` is a loose sanity check (leading `#`, case number in the
    first 200 chars) on `claude`'s output — used only to print a warning, never to
    block writing the file; a human judges the actual content.
 

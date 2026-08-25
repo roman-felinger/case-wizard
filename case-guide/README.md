@@ -37,7 +37,7 @@ Requires:
 - Claude CLI (`claude` on PATH)
 - `AZDO_PAT` env var (for Azure DevOps pull)
 
-Output: `case-guides/case-<code>-for-dummies.md`
+Output: `case-guides/case-<code>.md`
 
 ## Config
 

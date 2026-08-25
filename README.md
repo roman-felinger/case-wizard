@@ -81,7 +81,7 @@ python case-brief/case_brief.py -h            # full flag list
 
 ### 2. case-guide
 Turns the brief into a step-by-step walkthrough via a headless `claude` call.
-Output: `case-guide/case-guides/case-<number>-for-dummies.md`
+Output: `case-guide/case-guides/case-<number>.md`
 
 ```bash
 python case-guide/case_guide.py 12345               # smoke test: reads the checked-in demo brief

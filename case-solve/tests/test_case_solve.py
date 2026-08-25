@@ -215,8 +215,8 @@ class SafeNameAndGuideFilenameTests(unittest.TestCase):
         self.assertEqual(cs._safe_name("!!!"), "unlabeled")
 
     def test_guide_filename_uses_the_sanitized_name(self):
-        self.assertEqual(cs.guide_filename("T1"), "case-T1-for-dummies.md")
-        self.assertEqual(cs.guide_filename("../T1"), "case-.._T1-for-dummies.md")
+        self.assertEqual(cs.guide_filename("T1"), "case-T1.md")
+        self.assertEqual(cs.guide_filename("../T1"), "case-.._T1.md")
 
 
 class FindGuideTests(unittest.TestCase):
@@ -231,18 +231,18 @@ class FindGuideTests(unittest.TestCase):
         open(os.path.join(self.guide_dir, name), "w").close()
 
     def test_exact_match(self):
-        self._write("case-T2611845-for-dummies.md")
+        self._write("case-T2611845.md")
         path = cs.find_guide("T2611845", self.guide_dir)
-        self.assertEqual(os.path.basename(str(path)), "case-T2611845-for-dummies.md")
+        self.assertEqual(os.path.basename(str(path)), "case-T2611845.md")
 
     def test_substring_fallback_when_no_exact_match(self):
-        self._write("case-T2611845-for-dummies.md")
+        self._write("case-T2611845.md")
         path = cs.find_guide("T261", self.guide_dir)  # not an exact filename
-        self.assertEqual(os.path.basename(str(path)), "case-T2611845-for-dummies.md")
+        self.assertEqual(os.path.basename(str(path)), "case-T2611845.md")
 
     def test_ambiguous_substring_match_exits_rather_than_guessing(self):
-        self._write("case-T3330-for-dummies.md")
-        self._write("case-T3331-for-dummies.md")
+        self._write("case-T3330.md")
+        self._write("case-T3331.md")
         with self.assertRaises(SystemExit):
             cs.find_guide("T333", self.guide_dir)
 
@@ -258,7 +258,7 @@ class FindGuideTests(unittest.TestCase):
         # An unrelated file sitting one level up must never be found.
         parent = os.path.dirname(self.guide_dir)
         outside = tempfile.NamedTemporaryFile(
-            dir=parent, suffix="-for-dummies.md", prefix="case-ESCAPED", delete=False
+            dir=parent, suffix=".md", prefix="case-ESCAPED", delete=False
         )
         outside.close()
         try:
@@ -276,7 +276,7 @@ class YesFlagNonInteractiveTests(unittest.TestCase):
     called at all -- proving it, not just checking outcomes."""
 
     def _run_main(self, argv, guide_text, input_mock=None):
-        fake_guide_path = Path("case-guides") / "case-T1-for-dummies.md"
+        fake_guide_path = Path("case-guides") / "case-T1.md"
         mock_workspace = mock.Mock(repo_dir="C:/fake/repo", branch_name="case/T1")
         mock_wm_instance = mock.Mock()
         mock_wm_instance.setup.return_value = mock_workspace
@@ -318,7 +318,7 @@ class YesFlagNonInteractiveTests(unittest.TestCase):
         self.assertEqual(kwargs["repo_url"], "https://github.com/acme/fallback.git")
 
     def test_yes_without_repo_or_suggestion_raises_system_exit(self):
-        fake_guide_path = Path("case-guides") / "case-T1-for-dummies.md"
+        fake_guide_path = Path("case-guides") / "case-T1.md"
         input_mock = mock.Mock(
             side_effect=AssertionError("input() must never be called under --yes")
         )

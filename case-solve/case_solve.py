@@ -89,7 +89,7 @@ def apply_cli_overrides(cfg, args):
 def guide_filename(case_number):
     """Expected guide filename for a case number."""
     safe = _safe_name(case_number)
-    return f"case-{safe}-for-dummies.md"
+    return f"case-{safe}.md"
 
 
 def find_guide(case_number, guide_dir):
@@ -103,7 +103,7 @@ def find_guide(case_number, guide_dir):
 
     # Try substring match (glob)
     safe = _safe_name(case_number)
-    pattern = f"case-*{safe}*-for-dummies.md"
+    pattern = f"case-*{safe}*.md"
     matches = list(guide_dir.glob(pattern))
 
     if len(matches) == 1:

@@ -80,31 +80,31 @@ class FindExampleGuideTests(unittest.TestCase):
         return path
 
     def test_none_on_first_guide_ever(self):
-        self._write("case-T1-for-dummies.md", "current case's own leftover, if any")
-        result = cg.find_example_guide(self.output_dir, "case-T1-for-dummies.md")
+        self._write("case-T1.md", "current case's own leftover, if any")
+        result = cg.find_example_guide(self.output_dir, "case-T1.md")
         self.assertIsNone(result)
 
     def test_none_when_output_dir_does_not_exist_yet(self):
-        result = cg.find_example_guide(os.path.join(self.output_dir, "missing"), "case-T1-for-dummies.md")
+        result = cg.find_example_guide(os.path.join(self.output_dir, "missing"), "case-T1.md")
         self.assertIsNone(result)
 
     def test_picks_most_recent_excluding_current_case(self):
-        self._write("case-T1-for-dummies.md", "older", mtime_offset=-100)
-        self._write("case-T2-for-dummies.md", "newest", mtime_offset=0)
-        self._write("case-T3-for-dummies.md", "current run's own target", mtime_offset=100)
-        result = cg.find_example_guide(self.output_dir, "case-T3-for-dummies.md")
+        self._write("case-T1.md", "older", mtime_offset=-100)
+        self._write("case-T2.md", "newest", mtime_offset=0)
+        self._write("case-T3.md", "current run's own target", mtime_offset=100)
+        result = cg.find_example_guide(self.output_dir, "case-T3.md")
         self.assertEqual(result, "newest")
 
     def test_count_joins_multiple_most_recent(self):
-        self._write("case-T1-for-dummies.md", "oldest", mtime_offset=-200)
-        self._write("case-T2-for-dummies.md", "middle", mtime_offset=-100)
-        self._write("case-T3-for-dummies.md", "newest", mtime_offset=0)
-        result = cg.find_example_guide(self.output_dir, "case-T4-for-dummies.md", count=2)
+        self._write("case-T1.md", "oldest", mtime_offset=-200)
+        self._write("case-T2.md", "middle", mtime_offset=-100)
+        self._write("case-T3.md", "newest", mtime_offset=0)
+        result = cg.find_example_guide(self.output_dir, "case-T4.md", count=2)
         self.assertEqual(result, "newest\n\n---\n\nmiddle")
 
     def test_zero_count_disables(self):
-        self._write("case-T1-for-dummies.md", "irrelevant")
-        result = cg.find_example_guide(self.output_dir, "case-T2-for-dummies.md", count=0)
+        self._write("case-T1.md", "irrelevant")
+        result = cg.find_example_guide(self.output_dir, "case-T2.md", count=0)
         self.assertIsNone(result)
 
 
@@ -179,7 +179,7 @@ class FormatExampleGuideTests(unittest.TestCase):
         self.assertIn("first one", result)
 
     def test_existing_text_passes_through_unchanged(self):
-        text = "# Case T1 for Dummies\nsome content"
+        text = "# Case T1\nsome content"
         self.assertEqual(cg.format_example_guide(text), text)
 
 
@@ -255,7 +255,7 @@ class AddGuessWarningTests(unittest.TestCase):
     -- not left to chance on claude's own rewrite of the Get Set Up section
     keeping format_suggested_repo's inline "(guessed...)" annotation."""
 
-    GUIDE = "# Case T1 for Dummies\n\n## What this case is about\nSomething.\n"
+    GUIDE = "# Case T1\n\n## What this case is about\nSomething.\n"
 
     def test_no_warning_when_nothing_was_guessed(self):
         confirmed = {("P", "R"): {"clone_url": "https://x", "source": "ado-search"}}
@@ -269,7 +269,7 @@ class AddGuessWarningTests(unittest.TestCase):
         guessed = {("P", "R"): {"clone_url": "https://x", "source": "auto-match"}}
         result = cg._add_guess_warning(self.GUIDE, guessed)
         lines = result.split("\n")
-        self.assertEqual(lines[0], "# Case T1 for Dummies")
+        self.assertEqual(lines[0], "# Case T1")
         self.assertIn("guessed, not confirmed", lines[2])
         # The rest of claude's guide must still be there, untouched.
         self.assertIn("## What this case is about", result)

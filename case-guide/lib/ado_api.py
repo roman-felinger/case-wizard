@@ -6,8 +6,8 @@ find_related mirrors case-brief's search (branches/PRs whose name/title/
 description contains the case number) so this tool can re-run it fresh;
 get_branch_commits/get_pr_details go one level deeper than case-brief does
 -- commit messages, changed files, review comments -- since that's exactly
-the context a "for dummies" guide needs to describe what related work
-already attempted.
+the context case-guide's guide needs to describe what related work already
+attempted.
 
 Every request in this module goes through one requests.Session (built once
 by open_session, threaded through as the `session` argument) instead of a

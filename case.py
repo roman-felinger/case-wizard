@@ -22,8 +22,8 @@ stdin/stdout are inherited, not captured.
     own), so case.py strips --demo before forwarding and, if you didn't
     already give a case number, fills in case 12345 -- the case case-brief's
     own --demo run writes, checked into git (case-brief/case-briefs/case-
-    12345.md and case-guide's matching case-guides/case-12345-for-dummies.md)
-    so guide/solve have something real to run against with no CRM/ADO/repo
+    12345.md and case-guide's matching case-guides/case-12345.md) so
+    guide/solve have something real to run against with no CRM/ADO/repo
     setup.
 
 Examples:
@@ -51,8 +51,8 @@ SCRIPTS = {stage: HERE / f"case-{stage}" / f"case_{stage}.py" for stage in STAGE
 # The case case-brief's own --demo run writes (case_brief.py's demo_data()
 # falls back to ticket_number "12345" when no case number is given) --
 # checked in at case-brief/case-briefs/case-12345.md and
-# case-guide/case-guides/case-12345-for-dummies.md so guide/solve, which have
-# no fake-data mode of their own, have something real to run --demo against.
+# case-guide/case-guides/case-12345.md so guide/solve, which have no
+# fake-data mode of their own, have something real to run --demo against.
 DEMO_CASE_NUMBER = "12345"
 DEMO_AWARE_STAGES = {"guide", "solve"}  # brief has its own real --demo flag
 

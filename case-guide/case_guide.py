@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turn a case brief into a plain-language "Case <code> for Dummies" walkthrough.
+"""Turn a case brief into a plain-language, step-by-step implementation guide.
 
 A companion to case-brief, but a fully independent project -- it doesn't
 import case-brief's code, it just reads the Markdown brief case-brief's
@@ -308,7 +308,7 @@ Below is the full case brief (CRM details, linked Azure DevOps branches/PRs), pl
 Azure DevOps detail on those branches/PRs (their commit messages, changed files, and review \
 comments) that goes beyond what the brief itself shows.
 
-Write a Markdown guide titled "# Case {case_number} for Dummies" a newcomer could follow start \
+Write a Markdown guide titled "# Case {case_number}" a newcomer could follow start \
 to finish. Cover, in this order:
 
 1. **What this case is about** -- a plain-language summary of the customer's problem, pulled \
@@ -378,15 +378,15 @@ def _add_guess_warning(guide_text, suggested_repos):
     return f"{heading}\n\n{warning}{rest}"
 
 
-def _looks_like_guide(text):
+def _looks_like_guide(text, case_number):
     """Cheap sanity check that claude's output is actually the requested
     guide and not, say, a refusal or stray preamble that slipped past the
-    "output only the guide" instruction. Deliberately loose (just the
-    shape of a Markdown heading plus the requested phrase) and only ever
-    used to warn, never to block writing the file -- a human can judge the
-    actual content far better than this can."""
+    "output only the guide" instruction. Deliberately loose (just a leading
+    Markdown heading mentioning the case number) and only ever used to warn,
+    never to block writing the file -- a human can judge the actual content
+    far better than this can."""
     head = text.lstrip()[:200].lower()
-    return head.startswith("#") and "for dummies" in head
+    return head.startswith("#") and str(case_number).lower() in head
 
 
 def call_claude(prompt, model=None, extra_args=None, timeout=600, agent_name=None):
@@ -490,7 +490,7 @@ def main():
             "or pass --brief-dir if it's somewhere else."
         )
 
-    guide_path = os.path.join(output_dir, writer.guide_filename(f"case-{args.case_number}-for-dummies"))
+    guide_path = os.path.join(output_dir, writer.guide_filename(f"case-{args.case_number}"))
     if os.path.exists(guide_path) and os.path.getmtime(guide_path) >= os.path.getmtime(brief_path):
         print(f"{guide_path} is already up to date with the brief.")
         if not args.no_open:
@@ -531,10 +531,10 @@ def main():
         agent_name=agent_name,
     )
 
-    if not _looks_like_guide(guide_text):
+    if not _looks_like_guide(guide_text, args.case_number):
         print(
-            "Warning: claude's output doesn't look like the expected \"# Case ... for Dummies\" guide "
-            "(no leading heading / \"for dummies\" phrase in the first 200 characters) -- writing it "
+            f"Warning: claude's output doesn't look like the expected \"# Case {args.case_number}\" guide "
+            "(no leading heading / case number in the first 200 characters) -- writing it "
             "anyway, but take a look before trusting it.",
             file=sys.stderr,
         )
@@ -544,7 +544,7 @@ def main():
     path = writer.write_and_open(
         guide_text,
         output_dir,
-        f"case-{args.case_number}-for-dummies",
+        f"case-{args.case_number}",
         open_in_vscode=not args.no_open,
     )
     print(f"\nGuide written to {path}")

@@ -26,7 +26,7 @@ python case_solve.py -h
 ## Architecture
 
 Independent from case-brief and case-guide — reads the case guide file they produce
-(case-guide's `case-guides/case-<code>-for-dummies.md`), then implements changes
+(case-guide's `case-guides/case-<code>.md`), then implements changes
 guided by Claude.
 
 **Pipeline (`main` in `case_solve.py`):**
