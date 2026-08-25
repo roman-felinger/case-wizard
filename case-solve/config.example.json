@@ -1,12 +1,7 @@
 {
   "_comment": "Optional. Copy to config.json and edit. Every field has a CLI flag equivalent (run case_solve.py -h). Defaults work for most users.",
 
-  "azure_devops": {
-    "org_url": "https://dev.azure.com/yourorg"
-  },
-
   "open_in_vscode": true,
-  "auto_commit": true,
   "run_tests": true,
   "run_lint": true,
   "run_build": true

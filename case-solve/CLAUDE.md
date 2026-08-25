@@ -5,8 +5,7 @@ Guidance for Claude Code when working with case-solve.
 ## Commands
 
 ```
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+..\.venv\Scripts\Activate.ps1   # from case-solve/, on Windows -- repo root's venv has everything
 
 # Full run (prompts for repo URL)
 python case_solve.py T2611845

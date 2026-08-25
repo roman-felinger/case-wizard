@@ -6,20 +6,26 @@ porcelain-ish output, and the subprocess wrapper's error handling.
 All git operations are mocked -- no real repository, no real commits.
 
 **Bugs found while writing these tests, since fixed** (see
-CommitterGroupingBugTests / DictShapedChangeBugTests below, which now lock
-in the corrected behavior as regression tests):
+CommitterGroupingBugTests below, which now locks in the corrected behavior
+as a regression test):
 
 1. `_group_changes` used to check categories in an order where
    Documentation's `.txt` and Configuration's `.json` branches came before
    the Dependencies branch, so `requirements.txt`/`package.json` could never
    actually reach "Dependencies" despite being explicitly listed there.
    Fixed by moving the dependency-manifest check before the generic
-   extension checks.
-2. The `isinstance(change, dict)` branch did `change.file_path` (attribute
-   access) instead of `change["file_path"]` -- both ternary branches were
-   identical, so a dict-shaped change raised AttributeError despite the
-   isinstance check implying dicts were supported. Fixed (same bug, same
-   fix, also existed in lib/report.py).
+   extension checks -- and, since that ordering constraint is easy to
+   reintroduce by accident, by rewriting the whole thing as an ordered
+   `_GROUP_RULES` list rather than an if/elif chain a future addition could
+   silently misplace.
+
+(A second bug used to live here too: an `isinstance(change, dict)` branch
+that did `change.file_path` -- attribute access -- instead of
+`change["file_path"]`, so a dict-shaped change raised AttributeError despite
+the isinstance check implying dicts were supported. `changes_summary` is
+always a list of `Change` dataclass instances in every real run, so rather
+than fix the dict branch, it was removed -- `_group_changes` now only ever
+does attribute access, and there is no dict-shaped-change test anymore.)
 
 Run with: python -m unittest discover -s tests -v   (from case-solve/)
 """
@@ -105,20 +111,6 @@ class CommitterGroupingBugTests(unittest.TestCase):
         self.assertEqual(groups["Dependencies"], ["requirements.txt", "package.json"])
         self.assertEqual(groups["Documentation"], [])
         self.assertEqual(groups["Configuration"], [])
-
-
-class DictShapedChangeBugTests(unittest.TestCase):
-    """Regression test for module docstring bug #2: a dict-shaped change
-    must be read via change["file_path"], not change.file_path - now fixed
-    in lib/committer.py's _group_changes."""
-
-    def setUp(self):
-        self.committer = Committer(workspace=_workspace())
-
-    def test_dict_change_is_grouped_normally(self):
-        change_dict = {"file_path": "src/thing.py"}
-        groups = self.committer._group_changes([change_dict])
-        self.assertEqual(groups["Source Code"], ["src/thing.py"])
 
 
 class BuildCommitMessageTests(unittest.TestCase):

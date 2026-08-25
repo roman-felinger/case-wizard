@@ -1,27 +1,23 @@
 """Unit tests for lib/report.py: checklist/report markdown generation from
-plain dict/list inputs (Change/Commit/CheckResult-like objects and, per the
-module's own isinstance checks, dicts), and graceful handling of
-empty/partial input (no changes, no test_results, no commits).
+Change/Commit/CheckResult inputs, and graceful handling of empty/partial
+input (no changes, no test_results, no commits).
 
 No real subprocess/filesystem access beyond writing the report file itself,
 which is always done inside tempfile.TemporaryDirectory.
 
-**Bugs found while writing these tests, since fixed** (matching the
-identical bug fixed in test_committer.py for lib/committer.py):
+**Bug found while writing these tests, since fixed:** the diff-rendering
+block used to be gated on `isinstance(change, dict) and "diff" in change`,
+but real callers (see lib/implementer.py's `implement()`) always pass
+`Change` dataclass instances, never dicts - so the diff was *silently never
+shown* in any real report, even though `Change.diff` is a real, populated
+field. Fixed to always read `.diff` regardless of that isinstance check.
+See DiffRenderingTests below, now a regression test.
 
-1. `_section_changes`'s dict branch for `file_path` did `change.file_path`
-   (attribute access) in both ternary branches instead of
-   `change["file_path"]` for the dict case - a dict-shaped change raised
-   AttributeError instead of being rendered. Fixed. See
-   DictShapedChangeBugTests below, now a regression test.
-2. The diff-rendering block was gated on
-   `isinstance(change, dict) and "diff" in change`, but real callers (see
-   lib/implementer.py's `implement()`) always pass `Change` dataclass
-   instances, never dicts - so the diff was *silently never shown* in any
-   real report, even though `Change.diff` is a real, populated field.
-   Fixed to read `.diff` the same dict-or-dataclass way as `file_path`/
-   `description`. See DiffRenderingDeadCodeTests below, now a regression
-   test.
+(`_section_changes` used to also support dict-shaped changes via a second
+isinstance check, with an identical bug in the `file_path` branch. Since
+`changes_summary` is always a list of `Change` dataclass instances in every
+real run, that dict-support code was removed rather than fixed - there is
+no dict-shaped-change test anymore.)
 
 Run with: python -m unittest discover -s tests -v   (from case-solve/)
 """
@@ -185,16 +181,6 @@ class GenerateTests(unittest.TestCase):
         self.assertIn("a.py", content)
         self.assertIn("All checks passed", content)
         self.assertIn("No commits created", content)
-
-
-class DictShapedChangeBugTests(unittest.TestCase):
-    """Regression test: lib/report.py _section_changes' dict branch for
-    file_path - now fixed."""
-
-    def test_dict_change_renders_without_error(self):
-        report = _report(changes_summary=[{"file_path": "a.py", "description": "d"}])
-        text = "\n".join(report._section_changes())
-        self.assertIn("a.py", text)
 
 
 class DiffRenderingTests(unittest.TestCase):

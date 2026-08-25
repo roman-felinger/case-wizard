@@ -50,15 +50,6 @@ class VerificationResultsTests(unittest.TestCase):
         self.assertEqual(results.total_checks, 2)
         self.assertEqual(results.passed_checks, 1)
 
-    def test_summary_lists_only_failed_checks_by_name(self):
-        results = VerificationResults()
-        results.add(CheckResult(name="pytest", passed=True, output=""))
-        results.add(CheckResult(name="eslint", passed=False, output=""))
-        summary = results.summary()
-        self.assertIn("1/2 passed", summary)
-        self.assertIn("eslint", summary)
-        self.assertNotIn("pytest", summary)  # passed checks aren't named in the summary
-
 
 class RunCheckTests(unittest.TestCase):
     def setUp(self):

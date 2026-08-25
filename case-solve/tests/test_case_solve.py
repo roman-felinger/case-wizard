@@ -41,7 +41,6 @@ def _args(**overrides):
         case_number="T1",
         repo=None,
         solves_dir=None,
-        org_url=None,
         show_plan=False,
         no_implement=False,
         dry_run=False,
@@ -78,11 +77,6 @@ class ApplyCliOverridesTests(unittest.TestCase):
         cs.apply_cli_overrides(cfg, _args(guide_dir="/g", solves_dir="/s"))
         self.assertEqual(cfg["guide_dir"], "/g")
         self.assertEqual(cfg["solves_dir"], "/s")
-
-    def test_org_url_flag_sets_nested_azure_devops_key(self):
-        cfg = cs.load_config(Path("this-file-does-not-exist.json"))
-        cs.apply_cli_overrides(cfg, _args(org_url="https://dev.azure.com/acme"))
-        self.assertEqual(cfg["azure_devops"]["org_url"], "https://dev.azure.com/acme")
 
     def test_skip_flags_flip_the_corresponding_run_booleans_to_false(self):
         cfg = cs.load_config(Path("this-file-does-not-exist.json"))
@@ -155,13 +149,12 @@ class ConfigMergePrecedenceTests(unittest.TestCase):
         self.assertFalse(cfg["run_build"])  # config.json value, not the True default
 
     def test_full_chain_default_then_config_then_cli(self):
-        # open_in_vscode: default True -> config.json flips False -> CLI has
-        # no matching "turn it back on" flag, so config.json's value wins.
-        self._write_config({"open_in_vscode": False, "azure_devops": {"org_url": "https://old"}})
+        # guide_dir: default -> config.json overrides -> CLI overrides again.
+        self._write_config({"guide_dir": "/from-config"})
         cfg = cs.load_config(self.config_path)
-        cs.apply_cli_overrides(cfg, _args(org_url="https://new"))
-        self.assertFalse(cfg["open_in_vscode"])
-        self.assertEqual(cfg["azure_devops"]["org_url"], "https://new")  # CLI wins here
+        self.assertEqual(cfg["guide_dir"], "/from-config")
+        cs.apply_cli_overrides(cfg, _args(guide_dir="/from-cli"))
+        self.assertEqual(cfg["guide_dir"], "/from-cli")  # CLI wins here
 
 
 class ExtractRepoSuggestionTests(unittest.TestCase):

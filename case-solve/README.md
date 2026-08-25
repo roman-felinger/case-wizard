@@ -5,10 +5,10 @@ and commits. Never pushes — you review and push yourself.
 
 ## Setup
 
+Use the repo root's `.venv` — it already has everything all three stages need:
+
 ```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+..\.venv\Scripts\Activate.ps1      # from case-solve/, on Windows
 ```
 
 ## Usage

@@ -1,9 +1,7 @@
 """Verification: run tests, lint, build checks."""
 
 import subprocess
-import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 
 
 @dataclass
@@ -30,16 +28,6 @@ class VerificationResults:
         self.total_checks += 1
         if result.passed:
             self.passed_checks += 1
-
-    def summary(self) -> str:
-        """Generate summary text."""
-        failed = [c for c in self.checks if not c.passed]
-        lines = [f"Verification Results: {self.passed_checks}/{self.total_checks} passed"]
-        if failed:
-            lines.append("\nFailed checks:")
-            for c in failed:
-                lines.append(f"  ✗ {c.name}")
-        return "\n".join(lines)
 
 
 class Verifier:

@@ -1,7 +1,5 @@
 """Report generation: verification checklist, summary."""
 
-import subprocess
-import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -94,21 +92,9 @@ class ReportGenerator:
             return lines
 
         for i, change in enumerate(self.changes_summary, 1):
-            file_path = (
-                change["file_path"]
-                if isinstance(change, dict)
-                else change.file_path
-            )
-            description = (
-                change.get("description", "")
-                if isinstance(change, dict)
-                else change.description
-            )
-            diff = (
-                change.get("diff", "")
-                if isinstance(change, dict)
-                else getattr(change, "diff", "")
-            )
+            file_path = change.file_path
+            description = change.description
+            diff = getattr(change, "diff", "")
 
             lines.append(f"### Change {i}: {file_path}")
             lines.append("")
@@ -116,9 +102,6 @@ class ReportGenerator:
                 lines.append(f"**Description**: {description}")
                 lines.append("")
 
-            # Show diff if available - real callers pass Change dataclass
-            # instances (lib/implementer.py), not dicts, so this must not
-            # be gated on isinstance(change, dict) or it never fires.
             if diff:
                 lines.append("```diff")
                 lines.append(diff[:500])  # Limit diff display

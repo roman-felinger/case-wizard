@@ -1,7 +1,5 @@
 """Workspace management: clone repo, create branch, install dependencies."""
 
-import os
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass

@@ -1,11 +1,7 @@
 """Claude-guided implementation: read guide, get steps, apply changes."""
 
-import json
-import os
-import shutil
 import subprocess
 import sys
-import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,7 +13,6 @@ class Change:
     file_path: str  # Relative to repo
     description: str  # What changed
     diff: str  # The diff
-    content_after: str = ""  # Full file content after change
 
 
 class Implementer:
@@ -155,7 +150,6 @@ Generate the exact steps now, one file at a time:
             file_path=file_path,
             description=description,
             diff=diff,
-            content_after=content,
         )
 
     def _get_file_diff(self, file_path: str) -> str:

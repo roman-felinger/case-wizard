@@ -32,21 +32,19 @@ Usage:
 import argparse
 import copy
 import json
-import os
 import shutil
-import subprocess
 import sys
-import textwrap
 from pathlib import Path
 
-# This script prints Unicode (checkmarks, arrows, etc.). Windows' default
-# console/subprocess-pipe encoding is the system ANSI codepage (e.g.
-# cp1250), not UTF-8, which crashes on those characters whether run
-# directly in a terminal or piped from case-wizard's subprocess call.
-if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from shared.console import enable_utf8_console
+
+enable_utf8_console()  # this script prints Unicode; see shared/console.py
+
+from shared.config import deep_merge, strip_comments
+from shared.editor import open_in_editor
+from shared.safe_name import safe_name as _safe_name
 
 HERE = Path(__file__).parent
 CONFIG_PATH = HERE / "config.json"
@@ -58,40 +56,17 @@ DEFAULTS = {
     "guide_dir": str(GUIDE_DIR),
     "solves_dir": str(SOLVES_DIR),
     "open_in_vscode": True,
-    "auto_commit": True,
     "run_tests": True,
     "run_lint": True,
     "run_build": True,
     "github_base": None,  # e.g., "https://github.com/myorg" for opening PRs
-    "azure_devops": {
-        "org_url": None,  # Parsed from guide if present
-        "pat_env_var": "AZDO_PAT",
-    },
     "claude": {
         "model": None,
         "agent": "case-solver",
         "timeout": 900,  # 15 minutes for implementation
         "extra_args": [],
     },
-    "customer_repo_map": [],  # List of {customer_contains, project, repo}
 }
-
-
-def _deep_merge(base, override):
-    """Deep merge override dict into base, modifying base in place."""
-    for key, value in override.items():
-        if isinstance(value, dict) and isinstance(base.get(key), dict):
-            _deep_merge(base[key], value)
-        else:
-            base[key] = value
-    return base
-
-
-def _strip_comments(cfg):
-    """Remove all keys starting with underscore (documentation)."""
-    if not isinstance(cfg, dict):
-        return cfg
-    return {k: _strip_comments(v) for k, v in cfg.items() if not k.startswith("_")}
 
 
 def load_config(path=None):
@@ -100,8 +75,8 @@ def load_config(path=None):
     cfg = copy.deepcopy(DEFAULTS)
     if path.exists():
         with open(path, "r", encoding="utf-8") as f:
-            _deep_merge(cfg, json.load(f))
-        cfg = _strip_comments(cfg)
+            deep_merge(cfg, json.load(f))
+        cfg = strip_comments(cfg)
     return cfg
 
 
@@ -113,8 +88,6 @@ def apply_cli_overrides(cfg, args):
         cfg["guide_dir"] = args.guide_dir
     if args.solves_dir:
         cfg["solves_dir"] = args.solves_dir
-    if args.org_url:
-        cfg["azure_devops"]["org_url"] = args.org_url
     if args.no_open:
         cfg["open_in_vscode"] = False
     if args.skip_tests:
@@ -124,12 +97,6 @@ def apply_cli_overrides(cfg, args):
     if args.skip_build:
         cfg["run_build"] = False
     return cfg
-
-
-def _safe_name(text):
-    """Sanitize text for filename: only word chars, dots, dashes."""
-    import re
-    return re.sub(r"[^\w.-]+", "_", str(text)).strip("_") or "unlabeled"
 
 
 def guide_filename(case_number):
@@ -268,14 +235,6 @@ def build_parser():
         "--solves-dir",
         metavar="PATH",
         help="Directory to store cloned repos and work (default: ./case-solves)",
-    )
-
-    # Azure DevOps
-    azure = parser.add_argument_group("azure devops")
-    azure.add_argument(
-        "--org-url",
-        metavar="URL",
-        help="Azure DevOps org URL (e.g., https://dev.azure.com/myorg)",
     )
 
     # Modes
@@ -455,9 +414,7 @@ def main():
     print(f"\n✓ Report generated: {report_path}")
 
     if cfg["open_in_vscode"] and not args.dry_run:
-        code = shutil.which("code")
-        if code:
-            subprocess.run([code, str(report_path)], check=False)
+        open_in_editor(report_path)
 
     print("\n" + "=" * 70)
     print("Next steps:")
