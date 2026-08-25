@@ -8,6 +8,9 @@ Gathers case context from CRM and Azure DevOps into one Markdown brief.
 python case_brief.py --demo        # fake data, no setup needed
 ```
 
+`case-briefs/case-12345.md` is `--demo`'s output, checked into git as a fixture --
+case-guide's own demo run reads it as input (see case-guide/README.md).
+
 ## Real Setup
 
 Use the repo root's `.venv` — it already has everything all three stages need:
@@ -22,6 +25,8 @@ $env:AZDO_PAT = "your-pat-here"    # or setx AZDO_PAT "your-pat-here"
 ```
 
 ## Usage
+
+From the repo root, `python case.py brief ...` is equivalent to everything below.
 
 ```bash
 python case_brief.py T2611845              # lookup by ticket number

@@ -2,6 +2,17 @@
 
 Turns a case brief into a step-by-step implementation guide using Claude.
 
+## Quick Test
+
+```bash
+python case_guide.py 12345 --no-open
+```
+
+No `--demo` flag here -- every run needs a real brief on disk and makes a real
+`claude` call. `12345` works out of the box because
+`../case-brief/case-briefs/case-12345.md` is case-brief's `--demo` output, checked
+into git as a fixture -- no CRM/ADO setup needed to try this stage.
+
 ## Setup
 
 Use the repo root's `.venv` — it already has everything all three stages need:
@@ -11,6 +22,8 @@ Use the repo root's `.venv` — it already has everything all three stages need:
 ```
 
 ## Usage
+
+From the repo root, `python case.py guide ...` is equivalent to everything below.
 
 ```bash
 python case_guide.py T2611845

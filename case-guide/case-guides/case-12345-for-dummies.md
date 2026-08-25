@@ -1,0 +1,45 @@
+# Case 12345 for Dummies
+
+## 1. What this case is about
+
+Contoso s.r.o. gets a **dimension error when posting invoice 103042** in the invoicing module. Support already reproduced it on a copy of the customer's DB: it only fails when a **dimension default is missing**. Internal notes point at the likely root cause — the dimension default got cleared during the customer's last data import — and suggest checking **DIM-4021** before escalating further. Priority is High, and the resolve-by date is **today (2026-08-25)**, so this is urgent.
+
+## 2. Get set up
+
+No repo was confirmed by the automated tooling for this run (Azure DevOps org URL wasn't configured, so it couldn't search live). **But** the brief already shows a directly related branch and an active PR for this exact case number, so use that rather than guessing:
+
+```
+git clone <invoicing-service-repo-url> proj-invoicing-service
+cd proj-invoicing-service
+git fetch origin feature/12345-dimension-fix
+git checkout feature/12345-dimension-fix
+```
+
+- This is `proj/invoicing-service`, branch `feature/12345-dimension-fix`, backing **PR !88** ("Fix dimension check on partial posting (12345)", active, opened by Jane Doe — who is also this case's owner).
+- **Don't create a new branch.** Someone is already actively working this in PR !88 — check with Jane Doe before duplicating effort.
+- Get the exact clone URL from the `proj/invoicing-service` repo in Azure DevOps if you don't have it handy.
+
+## 3. What's already been tried
+
+- **PR !88 — "Fix dimension check on partial posting" (active, by Jane Doe).** Still open/in review, not merged — this is ongoing work, not an abandoned attempt.
+- No live commit list, changed-files, or review comments could be pulled for this PR (ADO org URL wasn't configured for this run) — so we only know it from its title and status. **Before writing new code, open PR !88 in the browser and read its actual diff and any review comments** — the fix may already largely exist.
+- Repro is confirmed and documented: fails specifically when a dimension default is missing, on a customer-data copy.
+
+## 4. What still needs to be developed, and how
+
+1. **Read PR !88's current diff first.** Confirm what "dimension check on partial posting" already covers, and whether it's a complete fix or a work-in-progress.
+2. **Reproduce locally** using the same repro steps: a copy of the customer's DB, dimension default missing, post invoice 103042 (or an equivalent test invoice with a missing dimension default).
+3. **Look up DIM-4021** (mentioned in the internal description) — it likely has prior context on why/how dimension defaults get cleared during import, and may already have a related fix pattern to reuse.
+4. **Decide the fix's scope** — two possible angles, confirm which PR !88 takes:
+   - Defensive: handle a missing dimension default gracefully during partial posting (no hard error).
+   - Root-cause: prevent the import process from clearing the dimension default in the first place.
+5. **Open questions** (not resolvable from the brief alone — ask Jane Doe or check DIM-4021):
+   - Is the import-time dimension-default clearing itself a bug, or expected behavior the posting logic just needs to tolerate?
+   - Is "partial posting" specifically implicated, or does full posting hit the same bug?
+
+## 5. How to verify and ship it
+
+- Test against the documented repro: post invoice 103042 (or equivalent) on data with a missing dimension default — it should post without the dimension error, and normal postings (dimension default present) shouldn't regress.
+- Given the near-term resolve-by date, coordinate directly with Jane Doe rather than working in isolation — confirm whether PR !88 is close to done or needs your changes added to it.
+- Push your commits (small, present-tense, e.g. "Handle missing dimension default on partial posting") to `feature/12345-dimension-fix` and continue via the existing **PR !88** targeting `test` — no need to open a new PR unless the team decides to split the work.
+- Get it reviewed and merged into `test`; promotion to `master` happens later as its own separate release PR, not something to do here.

@@ -15,7 +15,11 @@ case-brief/chrome-automation-profile/
 
 # Generated output
 case-brief/case-briefs/*.md
+# Exception: case-12345.md is a checked-in demo brief, see case-brief/README.md
+!case-brief/case-briefs/case-12345.md
 case-guide/case-guides/*.md
+# Exception: case-12345-for-dummies.md is a checked-in demo guide, see case-guide/README.md
+!case-guide/case-guides/case-12345-for-dummies.md
 case-solve/case-solves/
 
 # OS & IDE
