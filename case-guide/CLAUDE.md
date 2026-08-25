@@ -40,9 +40,11 @@ for its search/query logic, not an import (see TODO.md's resolved "duplication" 
 for what's shared vs. not); a fix to case-brief's `find_related`/pagination/
 error-handling does not automatically reach this copy and vice versa. What both
 copies' PAT-auth-header construction *does* share is the repo-root `shared/` package
-(`shared/ado_auth.py`, also used by case-brief and `app/azdo_check.py`) — that piece
-is pure, stable, and was byte-for-byte identical across all three before being
-extracted, unlike the search logic above. `lib/repo_suggest.py` is the same
+(`shared/ado_auth.py`, also used by case-brief) — that piece is pure, stable, and
+was byte-for-byte identical across both before being extracted, unlike the search
+logic above. (A third copy in `app/azdo_check.py` also shared it once, before the
+Streamlit desktop app was scrapped entirely -- see the "Scrap the Streamlit desktop
+app" commit; `app/` has no Python source left today.) `lib/repo_suggest.py` is the same
 independent-copy story as `ado_api.py`'s search logic, one level newer:
 case-brief used to own repo-suggestion (guess/render a clone-able repo + branch name)
 and render it as its own "Useful Commands" brief section; that moved here (see

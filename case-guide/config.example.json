@@ -1,10 +1,20 @@
 {
-  "_comment": "Optional. Copy to config.json and edit. Every field has a CLI flag equivalent (run case_guide.py -h). Defaults work for most users.",
+  "_comment": "Optional. Copy to config.json and edit. Every field has a CLI flag equivalent except claude.example_count (no flag -- 0 disables the house-style example). Defaults work for most users.",
+
+  "brief_dir": "../case-brief/case-briefs",
 
   "azure_devops": {
     "org_url": "https://dev.azure.com/yourorg",
     "project": null
   },
 
-  "output_dir": "./case-guides"
+  "output_dir": "./case-guides",
+
+  "claude": {
+    "model": null,
+    "extra_args": [],
+    "timeout": 600,
+    "agent": "case-guide-writer",
+    "example_count": 1
+  }
 }

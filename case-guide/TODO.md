@@ -6,12 +6,14 @@ PR-search-truncation signal, path-traversal-able case numbers, `_comment`
 leaking into config, falsy-`or` CLI-default bugs, missing `--project`
 override, auth-failure-looks-like-empty-result, no request
 concurrency/session reuse, the silent `MAX_PROJECTS` cap, `--claude-arg`
-unable to override to empty, `--show-prompt`, prompt-size truncation, a
-committed test suite, skip-if-unchanged/`--force`, and an output sanity
-check. A real end-to-end run against a live case + Azure DevOps org has
-since happened too (case T2611845, artexis/BTECH), including the
+unable to override to empty, prompt-size truncation, a committed test
+suite, skip-if-unchanged, and an output sanity check. (There's no
+`--show-prompt`/`--force` override flag -- skip-if-unchanged has no
+override at all; delete the existing guide file to force a regenerate.) A
+real end-to-end run against a live case + Azure DevOps org has since
+happened too (case T2611845, artexis/BTECH), including the
 `case-guide-writer` agent and house-style example added on top of that
-pipeline -- see README's Status section. What's left:
+pipeline -- see the root README's Status section. What's left:
 
 - ~~An org-wide (not just per-project) PR sample, for later.~~ **Dropped
   along with the style-PR sample itself:** pulling completed PRs across every
