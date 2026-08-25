@@ -1,12 +1,7 @@
-# case-wizard: All-in-one automation suite
-# Core UI
-streamlit>=1.32.0
+# case-wizard: CLI tools (case-brief, case-guide, case-solve)
 
 # HTTP and data
 requests>=2.31.0
-
-# Secure secrets storage (OS Credential Manager / Keychain)
-keyring>=24.0.0
 
 # Browser automation (case-brief)
 msal>=1.28
