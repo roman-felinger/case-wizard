@@ -48,11 +48,16 @@ def load_config():
     """Load all configuration (secrets from keyring, settings from file)."""
     config = dict(DEFAULTS)
 
-    # Load settings from file first (includes PAT if keyring failed on save)
+    # Load settings from file first (includes PAT if keyring failed on save).
+    # Only known DEFAULTS keys are pulled in -- a key that drops out of
+    # DEFAULTS (e.g. a removed setting) is dropped here too, rather than
+    # silently round-tripping forever in a file save_config keeps rewriting.
     if CONFIG_FILE.exists():
         try:
             file_config = json.loads(CONFIG_FILE.read_text())
-            config.update(file_config)
+            for key, value in file_config.items():
+                if key in DEFAULTS:
+                    config[key] = value
         except:
             pass
 
@@ -105,10 +110,10 @@ def get_env_dict(config):
 
     Only AZDO_PAT actually gets read by anything (lib/ado_api.py in each
     stage) - org URL, skip-ADO, max PRs, model, run-tests/lint/build etc.
-    are CLI flags on the stage scripts instead, and show_stage_tab() in
-    main.py passes them that way. Don't add more env vars here without
-    also adding the os.environ.get() on the reading end - see git history
-    for what setting these without a reader looked like.
+    are CLI flags on the stage scripts instead, built and passed by main.py's
+    run_button block. Don't add more env vars here without also adding the
+    os.environ.get() on the reading end - see git history for what setting
+    these without a reader looked like.
     """
     env = os.environ.copy()
     if config.get("azdo_pat"):

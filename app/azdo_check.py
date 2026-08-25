@@ -4,9 +4,14 @@ Verify Azure DevOps API access.
 Test organization URL and PAT token by making actual API calls.
 """
 
-import base64
-import requests
+import os
+import sys
 from typing import Tuple
+
+import requests
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from shared.ado_auth import auth_header
 
 
 def check_azdo_access(org_url: str, pat_token: str, timeout: int = 10) -> Tuple[bool, str]:
@@ -35,14 +40,7 @@ def check_azdo_access(org_url: str, pat_token: str, timeout: int = 10) -> Tuple[
         org_url = f"https://dev.azure.com/{org_url}"
 
     try:
-        # Create auth header
-        auth_string = f":{pat_token}"
-        auth_bytes = auth_string.encode("ascii")
-        auth_base64 = base64.b64encode(auth_bytes).decode("ascii")
-        headers = {
-            "Authorization": f"Basic {auth_base64}",
-            "Content-Type": "application/json",
-        }
+        headers = auth_header(pat_token)
 
         # Test API call: Get organization info
         # This is a lightweight endpoint that just verifies auth
@@ -75,14 +73,3 @@ def check_azdo_access(org_url: str, pat_token: str, timeout: int = 10) -> Tuple[
 
     except Exception as e:
         return False, f"❌ Error: {str(e)}"
-
-
-def get_azdo_test_message() -> str:
-    """Get a helpful message about what the test does."""
-    return """
-    Testing Azure DevOps access:
-    • Verifies organization URL is correct
-    • Verifies PAT token is valid
-    • Checks API connectivity
-    • Confirms proper scopes (Code Read, Project Read)
-    """

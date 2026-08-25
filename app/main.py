@@ -353,7 +353,9 @@ for step_num, (stage_id, stage_name, button_label, cmd_name, source_desc, prereq
             "solve": PROJECT_ROOT / "case-solve",
         }
 
-        cmd = [f"{cmd_name}.py", case_number, "--no-open"]
+        cmd = [f"{cmd_name}.py", case_number]
+        if not config.get("open_in_vscode", True):
+            cmd.append("--no-open")
         if stage_id == "brief":
             # --keep-browser-open: case_brief.py normally closes the
             # automation Chrome window when it finishes - correct for
@@ -380,8 +382,6 @@ for step_num, (stage_id, stage_name, button_label, cmd_name, source_desc, prereq
                 cmd.append("--no-style-prs")
         elif stage_id == "solve":
             cmd += ["--repo", repo_url, "--yes"]
-            if config.get("azdo_org_url"):
-                cmd += ["--org-url", config["azdo_org_url"]]
             if not config.get("run_tests"):
                 cmd.append("--skip-tests")
             if not config.get("run_lint"):

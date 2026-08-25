@@ -6,9 +6,6 @@ requests exception branches (Timeout/ConnectionError), a generic exception
 fallback, and the early-return-without-a-network-call path when org_url or
 pat_token is missing (asserted explicitly via `mock.assert_not_called()`).
 
-Deliberately skipped: get_azdo_test_message is a static help string with no
-branching logic -- not worth a test.
-
 Run with: python -m unittest discover -s tests -v   (from app/)
 """
 import os
