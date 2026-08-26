@@ -61,6 +61,18 @@ class GroupChangesTests(unittest.TestCase):
         )
         self.assertEqual(groups["Configuration"], ["config/settings.yaml", "app.config"])
 
+    def test_plain_json_yml_and_env_files_are_also_grouped_as_configuration(self):
+        # _GROUP_RULES' Configuration rule matches four extensions
+        # (.json/.yaml/.yml/.env/.config); the test above only exercises
+        # .yaml and .config -- a regression narrowing the match to just
+        # those two would go unnoticed without this one covering the rest.
+        # A plain .json file, distinct from package.json (which the earlier
+        # Dependencies rule claims first).
+        groups = self.committer._group_changes(
+            [_change("tsconfig.json"), _change("ci.yml"), _change(".env")]
+        )
+        self.assertEqual(groups["Configuration"], ["tsconfig.json", "ci.yml", ".env"])
+
     def test_markdown_is_grouped_as_documentation(self):
         groups = self.committer._group_changes([_change("README.md")])
         self.assertEqual(groups["Documentation"], ["README.md"])
