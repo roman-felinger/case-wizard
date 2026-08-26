@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Root-level entry point for the three case-wizard stages, individually or chained.
 
-`brief`/`guide`/`solve` just forward everything after the stage name to that
-stage's own script -- its flags never need duplicating here, so
+`brief`/`guide`/`solve`/`getter` just forward everything after the stage name
+to that script -- its flags never need duplicating here, so
 `case_wizard.py brief -h` shows that script's real, current help text.
+`getter` (case-getter/case_getter.py) is dispatched the same way but isn't
+part of the `all` chain below -- it runs brief+guide over every new,
+unassigned CRM case it finds, not one case_number at a time.
 
 `all` runs all three in order for one case (brief -> guide -> solve), calling
 each script via subprocess exactly as if you'd run them yourself one after
@@ -21,8 +24,8 @@ stdin/stdout are inherited, not captured.
     solve always needs a real repo -- neither has a fake-data mode of its
     own), so case_wizard.py strips --demo before forwarding and, if you didn't
     already give a case number, fills in case 12345 -- the case case-brief's
-    own --demo run writes, checked into git (case-brief/case-briefs/case-
-    12345.md and case-guide's matching case-guides/case-12345.md) so
+    own --demo run writes, checked into git (case-brief/briefs/brief-
+    12345.md and case-guide's matching case-guide/guides/guide-12345.md) so
     guide/solve have something real to run against with no CRM/ADO/repo
     setup.
 
@@ -38,6 +41,9 @@ Examples:
     python case_wizard.py all T2611845 --repo <url>              # full chain
     python case_wizard.py all T2611845 --stop-after guide        # brief + guide only
     python case_wizard.py all T2611845 --repo <url> --solve-arg --yes
+
+    python case_wizard.py getter                                  # brief+guide every new, unassigned case
+    python case_wizard.py getter --dry-run                        # just list them
 """
 import argparse
 import subprocess
@@ -47,11 +53,15 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 STAGES = ["brief", "guide", "solve"]
 SCRIPTS = {stage: HERE / f"case-{stage}" / f"case_{stage}.py" for stage in STAGES}
+# case-getter isn't a chain stage (it operates over many cases at once, not
+# one case_number -- see case-getter/case_getter.py), so it's dispatched
+# but deliberately left out of STAGES/`all`.
+SCRIPTS["getter"] = HERE / "case-getter" / "case_getter.py"
 
 # The case case-brief's own --demo run writes (case_brief.py's demo_data()
 # falls back to ticket_number "12345" when no case number is given) --
-# checked in at case-brief/case-briefs/case-12345.md and
-# case-guide/case-guides/case-12345.md so guide/solve, which have no
+# checked in at case-brief/briefs/brief-12345.md and
+# case-guide/guides/guide-12345.md so guide/solve, which have no
 # fake-data mode of their own, have something real to run --demo against.
 DEMO_CASE_NUMBER = "12345"
 DEMO_AWARE_STAGES = {"guide", "solve"}  # brief has its own real --demo flag
@@ -128,7 +138,7 @@ def main(argv=None):
     if stage in SCRIPTS:
         return run_one(stage, rest)
 
-    print(f"Unknown stage {stage!r}. Choose one of: {', '.join(STAGES)}, all", file=sys.stderr)
+    print(f"Unknown stage {stage!r}. Choose one of: {', '.join(STAGES)}, all, getter", file=sys.stderr)
     return 2
 
 

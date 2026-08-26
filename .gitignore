@@ -12,13 +12,14 @@ __pycache__/
 case-brief/.token_cache/
 
 # Generated output
-case-brief/case-briefs/*.md
-# Exception: case-12345.md is a checked-in demo brief, see case-brief/README.md
-!case-brief/case-briefs/case-12345.md
-case-guide/case-guides/*.md
-# Exception: case-12345.md is a checked-in demo guide, see case-guide/README.md
-!case-guide/case-guides/case-12345.md
+case-brief/briefs/*.md
+# Exception: brief-12345.md is a checked-in demo brief, see README.md
+!case-brief/briefs/brief-12345.md
+case-guide/guides/*.md
+# Exception: guide-12345.md is a checked-in demo guide, see README.md
+!case-guide/guides/guide-12345.md
 case-solve/case-solves/
+case-getter/gets/*.md
 
 # OS & IDE
 Thumbs.db

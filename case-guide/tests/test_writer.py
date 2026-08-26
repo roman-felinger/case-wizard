@@ -17,13 +17,13 @@ from lib import writer
 
 class GuideFilenameTests(unittest.TestCase):
     def test_word_chars_dots_and_dashes_are_kept(self):
-        self.assertEqual(writer.guide_filename("case-T26-11.845"), "case-T26-11.845.md")
+        self.assertEqual(writer.guide_filename("guide-T26-11.845"), "guide-T26-11.845.md")
 
     def test_a_run_of_unsafe_characters_collapses_to_a_single_underscore(self):
-        self.assertEqual(writer.guide_filename("case T1/T2\\T3"), "case_T1_T2_T3.md")
+        self.assertEqual(writer.guide_filename("guide T1/T2\\T3"), "guide_T1_T2_T3.md")
 
     def test_leading_and_trailing_unsafe_characters_are_stripped_not_padded(self):
-        self.assertEqual(writer.guide_filename("  case-T1  "), "case-T1.md")
+        self.assertEqual(writer.guide_filename("  guide-T1  "), "guide-T1.md")
 
     def test_an_all_unsafe_stem_falls_back_to_unlabeled(self):
         self.assertEqual(writer.guide_filename("///"), "unlabeled.md")
@@ -47,18 +47,18 @@ class WriteAndOpenTests(unittest.TestCase):
 
     def test_creates_the_output_directory_if_it_does_not_exist_yet(self):
         output_dir = os.path.join(self.tmp.name, "nested", "dir")
-        path = writer.write_and_open("hello", output_dir, "case-T1")
+        path = writer.write_and_open("hello", output_dir, "guide-T1")
         self.assertTrue(os.path.isdir(output_dir))
         self.assertTrue(os.path.exists(path))
 
     def test_writes_text_with_exactly_one_trailing_newline_regardless_of_input(self):
-        path = writer.write_and_open("hello\n\n\n", self.tmp.name, "case-T1")
+        path = writer.write_and_open("hello\n\n\n", self.tmp.name, "guide-T1")
         with open(path, "r", encoding="utf-8") as f:
             self.assertEqual(f.read(), "hello\n")
 
     def test_returned_path_matches_what_guide_filename_predicts(self):
-        path = writer.write_and_open("hello", self.tmp.name, "case-T1")
-        self.assertEqual(os.path.basename(path), writer.guide_filename("case-T1"))
+        path = writer.write_and_open("hello", self.tmp.name, "guide-T1")
+        self.assertEqual(os.path.basename(path), writer.guide_filename("guide-T1"))
 
 
 if __name__ == "__main__":

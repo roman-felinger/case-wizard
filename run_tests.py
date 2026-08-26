@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Run all three case-wizard test suites (case-brief, case-guide, case-solve).
+"""Run every case-wizard test suite (case-brief, case-guide, case-solve,
+case-getter).
 
 Each stage's tests/ has to run in its own pytest invocation, not one combined
-call over all three: they're all named "tests" with no unique package name,
+call over all of them: they're all named "tests" with no unique package name,
 so a single pytest process collecting all of them at once assigns duplicate
-module names and errors out (`ModuleNotFoundError` on the second and third).
-Running one subprocess per stage, cwd'd into that stage's folder -- exactly
-what each stage's own README already documents -- avoids that entirely.
+module names and errors out (`ModuleNotFoundError` on the second and later
+ones). Running one subprocess per stage, cwd'd into that stage's folder --
+exactly what each stage's own README already documents -- avoids that
+entirely.
 
 Output is one row per stage (result + a one-line note), not each stage's raw
 dot-per-test log -- a failing stage's full output is printed afterward, since
 a compact table isn't enough to debug an actual failure from.
 
 Examples:
-    python run_tests.py              # all three
+    python run_tests.py              # every stage
     python run_tests.py brief guide  # just these
 """
 import subprocess
@@ -21,7 +23,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-STAGES = ["brief", "guide", "solve"]
+STAGES = ["brief", "guide", "solve", "getter"]
 DIRS = {stage: HERE / f"case-{stage}" for stage in STAGES}
 
 
