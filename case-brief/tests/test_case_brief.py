@@ -144,6 +144,65 @@ class RunAdoLookupTests(unittest.TestCase):
         get_pr.assert_called_once_with("P", 5)
         self.assertEqual(prs, [pr])
 
+    @staticmethod
+    def _parse_one_branch_unless_empty(text):
+        # Same shape as _parse_one_pr_unless_empty above, but for the
+        # branch half of run_ado_lookup -- see that helper's own comment
+        # for why empty input (the related-links scan) must come back empty.
+        if not text:
+            return [], []
+        return [], [{"project": "P", "repo": "R", "branch": "feature/x"}]
+
+    def test_a_direct_branch_reference_found_resolves_it(self):
+        crm_results = [{"description": "https://dev.azure.com/myorg/P/_git/R?version=GBfeature/x"}]
+        branch = {"project": "P", "repo": "R", "branch": "feature/x", "url": "u", "clone_url": None}
+        with mock.patch.object(cb.ado_api, "get_branch", return_value=branch) as get_branch, \
+             mock.patch.object(cb.ado_api, "parse_direct_references",
+                                side_effect=self._parse_one_branch_unless_empty):
+            branches, prs, ado_error, ado_note = cb.run_ado_lookup(crm_results)
+        get_branch.assert_called_once_with("P", "R", "feature/x")
+        self.assertEqual(branches, [branch])
+        self.assertIsNone(ado_error)
+        self.assertIn("Resolved 1/1", ado_note)
+
+    def test_a_branch_lookup_raising_is_reported_in_the_note_not_raised(self):
+        crm_results = [{"description": "https://dev.azure.com/myorg/P/_git/R?version=GBfeature/x"}]
+        with mock.patch.object(cb.ado_api, "get_branch", side_effect=RuntimeError("500")), \
+             mock.patch.object(cb.ado_api, "parse_direct_references",
+                                side_effect=self._parse_one_branch_unless_empty):
+            branches, prs, ado_error, ado_note = cb.run_ado_lookup(crm_results)
+        self.assertEqual(branches, [])
+        self.assertIsNone(ado_error)
+        self.assertIn("0/1", ado_note)
+        self.assertIn("1 could not be resolved", ado_note)
+
+    def test_a_branch_not_found_in_ado_is_reported_in_the_note_not_raised(self):
+        # get_branch returning None (deleted/merged) is a different failure
+        # shape than it raising -- both must land in the same "could not be
+        # resolved" note, not just the raising one.
+        crm_results = [{"description": "https://dev.azure.com/myorg/P/_git/R?version=GBfeature/x"}]
+        with mock.patch.object(cb.ado_api, "get_branch", return_value=None), \
+             mock.patch.object(cb.ado_api, "parse_direct_references",
+                                side_effect=self._parse_one_branch_unless_empty):
+            branches, prs, ado_error, ado_note = cb.run_ado_lookup(crm_results)
+        self.assertEqual(branches, [])
+        self.assertIn("0/1", ado_note)
+        self.assertIn("1 could not be resolved", ado_note)
+
+    def test_a_branch_already_covered_by_related_links_is_excluded_and_not_resolved(self):
+        # Same (project, branch) dedup as the PR half above -- see
+        # run_ado_lookup's own docstring for why branches match on
+        # (project, branch) rather than including repo.
+        crm_results = [{
+            "description": "https://dev.azure.com/artexis/P/_git/R?version=GBfeature/x",
+            "related_links": [{"name": "feature/x", "url": "https://dev.azure.com/artexis/P/_git/R?version=GBfeature/x"}],
+        }]
+        with mock.patch.object(cb.ado_api, "get_branch") as get_branch:
+            branches, prs, ado_error, ado_note = cb.run_ado_lookup(crm_results)
+        get_branch.assert_not_called()
+        self.assertEqual((branches, prs), ([], []))
+        self.assertIsNone(ado_note)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -397,6 +397,16 @@ class FetchInlinableAttachmentsTests(unittest.TestCase):
         self.assertIsNone(notes[0]["attachment"])
         self.assertEqual(notes[0]["filename"], "error.log")
 
+    def test_malformed_base64_degrades_to_no_attachment_rather_than_raising(self):
+        # Same "get everything, just less" degrade as a fetch error above --
+        # just caught one step later, after the fetch itself succeeded but
+        # the returned documentbody doesn't actually decode.
+        page = self._page({"value": [{"annotationid": "a1", "documentbody": "not valid base64!!"}]})
+        notes, _, error = crm_scrape.get_notes(page, "https://x", "id1")
+        self.assertIsNone(error)
+        self.assertIsNone(notes[0]["attachment"])
+        self.assertEqual(notes[0]["filename"], "error.log")
+
 
 class GetActivitiesTests(unittest.TestCase):
     def test_maps_activity_fields_preferring_formatted_status(self):

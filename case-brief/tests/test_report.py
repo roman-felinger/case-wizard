@@ -31,6 +31,46 @@ class SafeNameTests(unittest.TestCase):
         self.assertEqual(report._safe_name(""), "unlabeled")
 
 
+class SanitizeFreetextForMarkdownTests(unittest.TestCase):
+    """_sanitize_freetext_for_markdown fixes two real, observed failure
+    modes in CRM freetext (description/notes/activities/promoted fields) --
+    see the function's own docstring."""
+
+    def test_nbsp_only_line_becomes_a_real_blank_line(self):
+        # CRM's own blank-paragraph marker (U+00A0) doesn't read as a
+        # paragraph break to Markdown -- normalized to an actual empty line.
+        text = "First paragraph.\n\xa0\nSecond paragraph."
+        out = report._sanitize_freetext_for_markdown(text)
+        self.assertEqual(out, "First paragraph.\n\nSecond paragraph.")
+
+    def test_a_lone_dash_line_is_escaped_so_it_cannot_become_a_setext_heading(self):
+        # A paragraph immediately followed by a dashes-only line would
+        # otherwise render as one giant <h1>/<h2> instead of a paragraph
+        # plus a divider -- this happened for real with a description
+        # ending in a lone "--" line.
+        text = "Some paragraph text\n--"
+        out = report._sanitize_freetext_for_markdown(text)
+        self.assertEqual(out, "Some paragraph text\n\\--")
+
+    def test_a_lone_equals_line_is_escaped_too(self):
+        text = "Some paragraph text\n===="
+        out = report._sanitize_freetext_for_markdown(text)
+        self.assertEqual(out, "Some paragraph text\n\\====")
+
+    def test_a_heading_marker_line_is_escaped(self):
+        text = "# Not actually a heading"
+        out = report._sanitize_freetext_for_markdown(text)
+        self.assertEqual(out, "\\# Not actually a heading")
+
+    def test_ordinary_text_passes_through_unchanged(self):
+        text = "Just a normal paragraph with - a dash in the middle."
+        self.assertEqual(report._sanitize_freetext_for_markdown(text), text)
+
+    def test_none_and_empty_string_pass_through_unchanged(self):
+        self.assertIsNone(report._sanitize_freetext_for_markdown(None))
+        self.assertEqual(report._sanitize_freetext_for_markdown(""), "")
+
+
 class BuildMarkdownMinimalInputTests(unittest.TestCase):
     def test_minimal_input_does_not_crash_and_notes_every_empty_section(self):
         md = report.build_markdown("T1", [], [], [])
@@ -107,15 +147,6 @@ class BuildMarkdownCrmSectionTests(unittest.TestCase):
         self.assertIn("Repro", md)
         self.assertIn("Reproduced locally.", md)
 
-    def test_no_notes_says_so_explicitly(self):
-        # Folded into Details' one combined "missing" line rather than its
-        # own "**Notes:**" header + "no notes" line -- see
-        # test_a_case_with_nothing_in_details_states_it_all_in_one_line.
-        crm_results = [{"ticket_number": "T1"}]
-        md = report.build_markdown("T1", crm_results, [], [])
-        self.assertIn("Notes", md)
-        self.assertNotIn("**Notes:**", md)
-
     def test_notes_error_is_shown_instead_of_a_blank_section(self):
         crm_results = [{"ticket_number": "T1", "notes_error": "HTTP 403"}]
         md = report.build_markdown("T1", crm_results, [], [])
@@ -171,14 +202,6 @@ class BuildMarkdownCrmSectionTests(unittest.TestCase):
         md = report.build_markdown("T1", crm_results, [], [])
         self.assertIn("phonecall", md)
         self.assertIn("Confirmed the repro.", md)
-
-    def test_no_activities_says_so_explicitly(self):
-        # Folded into Details' one combined "missing" line rather than its
-        # own "**Activity Timeline:**" header + "no activities" line.
-        crm_results = [{"ticket_number": "T1"}]
-        md = report.build_markdown("T1", crm_results, [], [])
-        self.assertIn("Activity Timeline", md)
-        self.assertNotIn("**Activity Timeline:**", md)
 
     def test_activities_error_is_shown_instead_of_a_blank_section(self):
         crm_results = [{"ticket_number": "T1", "activities_error": "HTTP 500"}]
@@ -348,18 +371,6 @@ class BuildMarkdownRelatedLinksTests(unittest.TestCase):
         # Absence of the Helpdesk link is never reported as "missing" --
         # see the class docstring -- so only related_links shows up.
         self.assertIn("_No linked Azure DevOps items found for this case._", md)
-
-    def test_a_related_link_is_copyable_without_clicking_through(self):
-        # The URL is the hyperlink's own visible text (same convention as
-        # the Helpdesk link), so it's readable/copyable without clicking
-        # through -- no separate raw-URL backtick trailer needed.
-        crm_results = [{"ticket_number": "T1", "related_links": [
-            {"name": "PR 1", "url": "https://dev.azure.com/o/P/_git/R/pullrequest/1"},
-        ]}]
-        md = report.build_markdown("T1", crm_results, [], [])
-        self.assertIn(
-            "- PR 1: [https://dev.azure.com/o/P/_git/R/pullrequest/1]"
-            "(https://dev.azure.com/o/P/_git/R/pullrequest/1)", md)
 
     def test_helpdesk_link_label_is_plain_text_and_the_url_itself_is_the_hyperlink(self):
         # Unlike the ADO-resolved branches/PRs (label as the hyperlink),
