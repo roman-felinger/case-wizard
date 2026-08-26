@@ -36,8 +36,10 @@ class BuildMarkdownMinimalInputTests(unittest.TestCase):
         md = report.build_markdown("T1", [], [], [])
         self.assertIn("# Case T1", md)
         self.assertIn("No CRM case data", md)
-        self.assertIn("No matching branches found", md)
-        self.assertIn("No matching pull requests found", md)
+        # Nothing to report at all (no branches, no PRs, no CRM related
+        # links, no Helpdesk link) -- one combined "not found" line, not a
+        # separate one per category.
+        self.assertIn("No related links found in the CRM case.", md)
 
     def test_ado_error_suppresses_branch_and_pr_listing(self):
         branches = [{"project": "P", "repo": "R", "branch": "b", "url": "u"}]
@@ -49,6 +51,9 @@ class BuildMarkdownMinimalInputTests(unittest.TestCase):
         # confirmed "these are the only results" listing.
         self.assertNotIn("[P/R: b]", md)
         self.assertNotIn("!1", md)
+        # An error already explains the empty section -- no redundant
+        # "nothing found" line on top of it.
+        self.assertNotIn("No related links found", md)
 
 
 class BuildMarkdownCrmSectionTests(unittest.TestCase):
@@ -132,10 +137,34 @@ class BuildMarkdownCrmSectionTests(unittest.TestCase):
         self.assertIn("Could not load the activity timeline: HTTP 500", md)
 
 
+class BuildMarkdownDetailsSectionTests(unittest.TestCase):
+    """Description, promoted fields, Notes, and Activity Timeline are all
+    grouped under one "## Details" heading, right after "## Related Links"
+    -- see build_markdown."""
+
+    def test_details_heading_comes_after_related_links_and_before_description(self):
+        crm_results = [{"ticket_number": "T1", "description": "Something broke."}]
+        md = report.build_markdown("T1", crm_results, [], [])
+        related_idx = md.index("## Related Links")
+        details_idx = md.index("## Details")
+        description_idx = md.index("**Description:**")
+        self.assertLess(related_idx, details_idx)
+        self.assertLess(details_idx, description_idx)
+
+    def test_details_heading_appears_once_per_rendered_case(self):
+        crm_results = [
+            {"ticket_number": "T1", "title": "Case One"},
+            {"ticket_number": "T2", "title": "Case Two"},
+        ]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertEqual(md.count("## Details"), 2)
+
+
 class BuildMarkdownRelatedLinksTests(unittest.TestCase):
-    """Covers the Dev tab's "Related links" grid (see
-    crm_scrape.get_related_links) -- a PR/branch attached directly in CRM,
-    rendered as its own subsection right after Description/promoted fields."""
+    """Covers "## Related Links": Azure DevOps branches/PRs resolved from a
+    direct reference in the CRM case, the Dev tab's "Related links" grid
+    (see crm_scrape.get_related_links), and the case's Helpdesk link, all
+    combined into one section -- see report._related_links_lines."""
 
     def test_a_related_link_renders_as_a_markdown_link_with_status_and_date(self):
         crm_results = [{"ticket_number": "T1", "related_links": [
@@ -143,6 +172,7 @@ class BuildMarkdownRelatedLinksTests(unittest.TestCase):
              "status": "Active", "created_on": "2026-08-13T11:18:01Z"},
         ]}]
         md = report.build_markdown("T1", crm_results, [], [])
+        self.assertIn("## Related Links", md)
         self.assertIn("[PR 20216 ✅ (CU-BTECH)](https://dev.azure.com/o/P/_git/R/pullrequest/20216)", md)
         self.assertIn("Active", md)
         self.assertIn("2026-08-13T11:18:01Z", md)
@@ -152,20 +182,60 @@ class BuildMarkdownRelatedLinksTests(unittest.TestCase):
         md = report.build_markdown("T1", crm_results, [], [])
         self.assertIn("[https://dev.azure.com/x](https://dev.azure.com/x)", md)
 
-    def test_no_related_links_omits_the_section_entirely(self):
-        crm_results = [{"ticket_number": "T1", "related_links": []}]
-        md = report.build_markdown("T1", crm_results, [], [])
-        self.assertNotIn("Linked Azure DevOps Items", md)
-
-    def test_absent_related_links_key_does_not_crash_or_render_the_section(self):
-        crm_results = [{"ticket_number": "T1"}]
-        md = report.build_markdown("T1", crm_results, [], [])
-        self.assertNotIn("Linked Azure DevOps Items", md)
-
-    def test_related_links_error_is_shown_instead_of_a_blank_section(self):
+    def test_related_links_error_is_shown_instead_of_the_list(self):
         crm_results = [{"ticket_number": "T1", "related_links_error": "HTTP 403"}]
         md = report.build_markdown("T1", crm_results, [], [])
         self.assertIn("Could not load linked Azure DevOps items: HTTP 403", md)
+        # The error already explains why nothing is listed -- no redundant
+        # "nothing found" line alongside it.
+        self.assertNotIn("No related links found", md)
+
+    def test_nothing_found_at_all_shows_the_combined_not_found_line(self):
+        crm_results = [{"ticket_number": "T1", "related_links": []}]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertIn("No related links found in the CRM case.", md)
+
+    def test_helpdesk_link_renders_as_the_last_entry(self):
+        crm_results = [{
+            "ticket_number": "T1",
+            "all_fields": [{"logical_name": "art_helpdesklink", "label": "Helpdesk link",
+                             "value": "https://artexhelpdesk.powerappsportals.com/support/edit-case/?id=1"}],
+            "related_links": [{"name": "PR 1", "url": "https://dev.azure.com/o/P/_git/R/pullrequest/1"}],
+        }]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertIn("[Helpdesk link](https://artexhelpdesk.powerappsportals.com/support/edit-case/?id=1)", md)
+        # Must come after the CRM related link -- "last member".
+        self.assertLess(md.index("[PR 1]"), md.index("[Helpdesk link]"))
+        self.assertNotIn("No related links found", md)
+
+    def test_helpdesk_link_is_excluded_from_other_crm_fields(self):
+        crm_results = [{
+            "ticket_number": "T1",
+            "all_fields": [{"logical_name": "art_helpdesklink", "label": "Helpdesk link", "value": "https://x"}],
+        }]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertNotIn("Other CRM Fields", md)  # the only field present was promoted into Related Links
+
+    def test_helpdesk_link_missing_value_does_not_render_or_crash(self):
+        crm_results = [{
+            "ticket_number": "T1",
+            "all_fields": [{"logical_name": "art_helpdesklink", "label": "Helpdesk link", "value": None}],
+        }]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertNotIn("Helpdesk link]", md)
+        self.assertIn("No related links found in the CRM case.", md)
+
+    def test_ado_branches_and_prs_are_not_duplicated_across_multiple_cases(self):
+        # Branches/PRs are whole-run, not per-case -- must appear only once
+        # even though "## Related Links" itself renders once per case.
+        branches = [{"project": "P", "repo": "R", "branch": "b", "url": "u"}]
+        crm_results = [
+            {"ticket_number": "T1", "title": "Case One"},
+            {"ticket_number": "T2", "title": "Case Two"},
+        ]
+        md = report.build_markdown("T1", crm_results, branches, [])
+        self.assertEqual(md.count("[P/R: b]"), 1)
+        self.assertEqual(md.count("## Related Links"), 2)
 
 
 class BuildMarkdownPromotedFieldsTests(unittest.TestCase):
@@ -267,36 +337,28 @@ class BuildMarkdownAdoNoteTests(unittest.TestCase):
         self.assertNotIn("should not show", md)
 
 
-class BuildMarkdownAdoSectionPlacementTests(unittest.TestCase):
-    """The Azure DevOps section is deliberately pulled up next to a case's
+class BuildMarkdownRelatedLinksPlacementTests(unittest.TestCase):
+    """"## Related Links" is deliberately pulled up next to a case's
     at-a-glance details (Ticket #/Customer/.../Created) rather than buried
     after Description/Notes/Activity Timeline -- see build_markdown."""
 
-    def test_ado_section_comes_right_after_the_details_and_before_description(self):
+    def test_related_links_section_comes_right_after_the_details_and_before_the_details_heading(self):
         crm_results = [{"ticket_number": "T1", "description": "Something broke."}]
         md = report.build_markdown("T1", crm_results, [], [])
         created_idx = md.index("**Created:**")
-        ado_idx = md.index("## Azure DevOps")
-        description_idx = md.index("**Description:**")
-        self.assertLess(created_idx, ado_idx)
-        self.assertLess(ado_idx, description_idx)
+        related_idx = md.index("## Related Links")
+        details_idx = md.index("## Details")
+        self.assertLess(created_idx, related_idx)
+        self.assertLess(related_idx, details_idx)
 
-    def test_ado_section_still_renders_when_no_crm_case_was_found(self):
+    def test_related_links_section_still_renders_when_no_crm_case_was_found(self):
         md = report.build_markdown("T1", [], [], [])
-        self.assertIn("## Azure DevOps", md)
+        self.assertIn("## Related Links", md)
 
-    def test_ado_section_still_renders_when_every_crm_result_errored(self):
+    def test_related_links_section_still_renders_when_every_crm_result_errored(self):
         crm_results = [{"error": "No authenticated CRM tab found.", "url": "https://x"}]
         md = report.build_markdown("T1", crm_results, [], [])
-        self.assertIn("## Azure DevOps", md)
-
-    def test_ado_section_appears_only_once_with_multiple_cases(self):
-        crm_results = [
-            {"ticket_number": "T1", "title": "Case One"},
-            {"ticket_number": "T2", "title": "Case Two"},
-        ]
-        md = report.build_markdown("T1", crm_results, [], [])
-        self.assertEqual(md.count("## Azure DevOps"), 1)
+        self.assertIn("## Related Links", md)
 
 
 class WriteAndOpenTests(unittest.TestCase):

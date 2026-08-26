@@ -145,14 +145,31 @@ entity's real entity-set name or its lookup attribute back to incident, only thi
 relationship's navigation property name. Each entry's `art_name` (display label,
 often carrying a status emoji/tag CRM users typed by hand) and `art_urllink` (the
 actual PR/branch URL) are exposed as `related_links` on the case result and: (1)
-rendered as their own "Linked Azure DevOps Items (from CRM)" subsection by
-`report.py`, right after Description/promoted fields, showing the raw CRM label
-alongside the link; and (2) fed into `case_brief.py`'s `_collect_reference_text`
-alongside notes/activities/fields, so `run_ado_lookup` resolves them the exact same
-way as a link merely pasted somewhere — real title/status/created-by via
-`ado_api.get_pull_request`, in the existing Azure DevOps section, not just the raw
-CRM label. Not yet verified against more than the one case used to find it — the
+rendered into the "## Related Links" section by `report.py` (see below), showing
+the raw CRM label alongside the link; and (2) fed into `case_brief.py`'s
+`_collect_reference_text` alongside notes/activities/fields, so `run_ado_lookup`
+resolves them the exact same way as a link merely pasted somewhere — real
+title/status/created-by via `ado_api.get_pull_request`, not just the raw CRM
+label. Not yet verified against more than the one case used to find it — the
 Dev tab grid is likely rare/empty on most cases, same caveat as Notes/Activities.
+
+**Report structure — "## Related Links" / "## Details" (2026-08-26).** The brief's
+top-level sections were consolidated so each case's own heading is followed by
+exactly one "## Related Links" section (everything that points at outside work:
+Azure DevOps branches/PRs resolved from a direct reference in the CRM case, the
+Dev tab's `related_links` grid above, and finally the case's own Helpdesk portal
+link, in that order — see `report._related_links_lines`/`HELPDESK_LINK_FIELD`) and
+one "## Details" section (Description, the promoted description fields, Notes,
+Activity Timeline). Whatever was actually found in Related Links is listed first;
+a single "_No related links found in the CRM case._" line only appears at the very
+end, and only if the combined list (branches + PRs + CRM related links + Helpdesk
+link) came up completely empty — never as an upfront assumption ahead of the
+search's own results, which is what the old per-category "No direct Azure DevOps
+link found"/"No matching branches found"/"No matching pull requests found"
+messages did. The Helpdesk link field (`art_helpdesklink`) is matched by
+logical_name the same way `DEFAULT_PROMOTED_FIELDS` is, but rendered as a link in
+Related Links instead of a text block under Details, and excluded from "Other CRM
+Fields" the same way promoted fields are.
 
 The brief no longer suggests a repo to clone/branch commands for — that guess moved
 to case-guide (see below), which is the thing that actually needs it; case-brief's

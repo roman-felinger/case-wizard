@@ -103,13 +103,18 @@ def run_ado_lookup(crm_results):
     so if the case doesn't already link its own work, this comes back
     empty rather than searching for it.
 
-    Returns (branches, pull_requests, ado_error, ado_note).
+    Returns (branches, pull_requests, ado_error, ado_note). ado_note is None
+    when nothing was found in the text scan -- report.py's "## Related
+    Links" section already says so generically (covering CRM's own Dev-tab
+    related links and the Helpdesk link too, not just this text scan) once
+    it's seen the combined result come up empty, so there's no need for a
+    redundant, ADO-specific "nothing found" message here.
     """
     ref_text = _collect_reference_text(crm_results)
     pr_refs, branch_refs = ado_api.parse_direct_references(ref_text)
 
     if not (pr_refs or branch_refs):
-        return [], [], None, "No direct Azure DevOps link found in the CRM case."
+        return [], [], None, None
 
     branches, pull_requests = [], []
     resolved = failed = 0
@@ -164,6 +169,11 @@ def demo_data(case_number):
              "value": "Public-facing summary: invoice posting is delayed while we investigate a dimension error."},
             {"logical_name": "art_internaldescriptionandnotes", "label": "Interní popis & poznámky",
              "value": "Looks like the dimension default was cleared during the last data import -- check DIM-4021 before escalating."},
+            # The case's own Helpdesk portal link -- promoted into "##
+            # Related Links" as its own entry (see report.HELPDESK_LINK_FIELD),
+            # not rendered as a text block like the two fields above.
+            {"logical_name": "art_helpdesklink", "label": "Helpdesk link",
+             "value": "https://artexhelpdesk.powerappsportals.com/support/edit-case/?id=00000000-0000-0000-0000-000000000000"},
             {"logical_name": "caseorigincode", "label": "Origin", "value": "Phone"},
             {"logical_name": "resolvebydate", "label": "Resolve By", "value": "2026-08-25T09:12:00Z"},
         ],

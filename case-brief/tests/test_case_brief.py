@@ -59,11 +59,15 @@ class CollectReferenceTextTests(unittest.TestCase):
 
 
 class RunAdoLookupTests(unittest.TestCase):
-    def test_no_direct_reference_found_returns_empty_with_a_note(self):
+    def test_no_direct_reference_found_returns_empty_with_no_note(self):
+        # No ADO-specific "nothing found" message here -- report.py's "##
+        # Related Links" section says so generically once it's seen the
+        # combined result (ADO refs + CRM related links + Helpdesk link)
+        # come up empty, so a redundant note isn't needed.
         branches, prs, ado_error, ado_note = cb.run_ado_lookup([])
         self.assertEqual((branches, prs), ([], []))
         self.assertIsNone(ado_error)
-        self.assertIn("No direct Azure DevOps link found", ado_note)
+        self.assertIsNone(ado_note)
 
     def test_direct_reference_found_resolves_it(self):
         crm_results = [{"description": "https://dev.azure.com/myorg/P/_git/R/pullrequest/5"}]

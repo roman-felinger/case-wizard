@@ -61,32 +61,61 @@ DEFAULT_PROMOTED_FIELDS = [
     "art_internaldescriptionandnotes",  # "Interní popis & poznámky"
 ]
 
+# The case's own Helpdesk portal link. Rendered as the last entry in the
+# "## Related Links" section (see _related_links_lines) rather than as one
+# more text block under DEFAULT_PROMOTED_FIELDS -- it's a link, not prose --
+# but still excluded from the "Other CRM Fields" catch-all the same way
+# DEFAULT_PROMOTED_FIELDS is (see build_markdown).
+HELPDESK_LINK_FIELD = "art_helpdesklink"
 
-def _ado_section_lines(ado_error, ado_note, branches, pull_requests):
-    """The '## Azure DevOps' section's lines, as its own helper so
-    build_markdown can slot it in right after a case's core details (see the
-    "pulled up to the details" placement below) instead of building it
-    inline exactly where it prints."""
-    lines = ["## Azure DevOps — Related Branches & Pull Requests"]
+
+def _related_links_lines(ado_error, ado_note, branches, pull_requests,
+                          related_links=None, related_links_error=None, helpdesk_link=None):
+    """The '## Related Links' section's lines -- everything that points at
+    outside work tied to this case: Azure DevOps branches/PRs resolved from
+    a direct reference found in the CRM case, the case form's own Dev-tab
+    "Related links" grid, and finally the case's own Helpdesk portal link
+    (`helpdesk_link`, an optional {"label", "value"} dict -- see
+    HELPDESK_LINK_FIELD), in that order, Helpdesk link last.
+
+    Whatever was actually found is listed first; a single "nothing found"
+    line only appears at the end, and only if the combined list came up
+    completely empty -- never as an upfront assumption before the search's
+    own results are shown next to it.
+    """
+    lines = ["## Related Links"]
+    found_any = False
+
     if ado_error:
         lines.append(f"_Could not query Azure DevOps: {ado_error}_")
-        return lines
-    if ado_note:
-        lines.append(f"_{ado_note}_")
-        lines.append("")
-    lines.append("**Branches:**")
-    if not branches:
-        lines.append("_No matching branches found._")
     else:
-        for b in branches:
+        if ado_note:
+            lines.append(f"_{ado_note}_")
+        for b in branches or []:
             lines.append(f"- [{b['project']}/{b['repo']}: {b['branch']}]({b['url']})")
-    lines.append("")
-    lines.append("**Pull requests:**")
-    if not pull_requests:
-        lines.append("_No matching pull requests found._")
-    else:
-        for pr in pull_requests:
+            found_any = True
+        for pr in pull_requests or []:
             lines.append(f"- [{pr['project']}/{pr['repo']} !{pr['id']}]({pr['url']}) — {pr.get('title')} ({pr.get('status')}, by {pr.get('created_by') or '—'})")
+            found_any = True
+
+    if related_links_error:
+        lines.append(f"_Could not load linked Azure DevOps items: {related_links_error}_")
+    else:
+        for link in related_links or []:
+            label = link.get("name") or link.get("url") or "(unnamed link)"
+            line = f"- [{label}]({link['url']})" if link.get("url") else f"- {label}"
+            extra = " — ".join(x for x in [link.get("status"), link.get("created_on")] if x)
+            if extra:
+                line += f" ({extra})"
+            lines.append(line)
+            found_any = True
+
+    if helpdesk_link and helpdesk_link.get("value"):
+        lines.append(f"- [{helpdesk_link.get('label') or 'Helpdesk link'}]({helpdesk_link['value']})")
+        found_any = True
+
+    if not found_any and not ado_error and not related_links_error:
+        lines.append("_No related links found in the CRM case._")
     return lines
 
 
@@ -97,8 +126,10 @@ def build_markdown(case_number, crm_results, branches, pull_requests,
 
     lines = [f"# Case {case_number}", ""]
     leftover_by_case = []  # [(case, [field, ...]), ...] -- rendered at the bottom, see below
-    ado_lines = _ado_section_lines(ado_error, ado_note, branches, pull_requests)
-    ado_rendered = False  # the Azure DevOps section is whole-run, not per-case -- render it once
+    # branches/pull_requests are whole-run, not per-case -- attach them to
+    # the first case's own "## Related Links" section rather than repeating
+    # (or orphaning) them.
+    ado_rendered = False
 
     if not crm_results:
         lines.append("_No CRM case data (CRM lookup was skipped or returned nothing)._")
@@ -115,21 +146,32 @@ def build_markdown(case_number, crm_results, branches, pull_requests,
         lines.append(f"- **Created:** {c.get('created_on') or '—'}")
         lines.append("")
 
-        # Pulled up here (right after the at-a-glance details, before the
-        # wall of Description/Notes/Activity Timeline text) rather than
-        # buried after it, on the first case actually rendered.
-        if not ado_rendered:
-            lines.extend(ado_lines)
-            lines.append("")
-            ado_rendered = True
+        all_fields = c.get("all_fields") or []
+        by_logical_name = {f["logical_name"]: f for f in all_fields}
+        helpdesk_field = by_logical_name.get(HELPDESK_LINK_FIELD)
 
+        # Pulled up here (right after the at-a-glance details, before the
+        # wall of Description/Notes/Activity Timeline text in "## Details"
+        # below) rather than buried after it.
+        lines.extend(_related_links_lines(
+            ado_error if not ado_rendered else None,
+            ado_note if not ado_rendered else None,
+            branches if not ado_rendered else [],
+            pull_requests if not ado_rendered else [],
+            related_links=c.get("related_links"),
+            related_links_error=c.get("related_links_error"),
+            helpdesk_link=helpdesk_field,
+        ))
+        lines.append("")
+        ado_rendered = True
+
+        lines.append("## Details")
+        lines.append("")
         lines.append("**Description:**")
         lines.append("")
         lines.append(_sanitize_freetext_for_markdown(c.get("description")) or "_(none)_")
         lines.append("")
 
-        all_fields = c.get("all_fields") or []
-        by_logical_name = {f["logical_name"]: f for f in all_fields}
         for logical_name in promoted_fields:
             f = by_logical_name.get(logical_name)
             if not f:
@@ -139,25 +181,14 @@ def build_markdown(case_number, crm_results, branches, pull_requests,
             lines.append(_sanitize_freetext_for_markdown(str(f["value"])) or "_(none)_")
             lines.append("")
 
-        leftover = [f for f in all_fields if f["logical_name"] not in promoted_fields]
+        # Helpdesk link is promoted into "## Related Links" above, not
+        # rendered as a text block here -- excluded the same way
+        # promoted_fields is, so it doesn't also show up in "Other CRM
+        # Fields" at the bottom.
+        excluded_fields = set(promoted_fields) | {HELPDESK_LINK_FIELD}
+        leftover = [f for f in all_fields if f["logical_name"] not in excluded_fields]
         if leftover:
             leftover_by_case.append((c, leftover))
-
-        related_links = c.get("related_links") or []
-        if related_links or c.get("related_links_error"):
-            lines.append("**Linked Azure DevOps Items (from CRM):**")
-            lines.append("")
-            if c.get("related_links_error"):
-                lines.append(f"_Could not load linked Azure DevOps items: {c['related_links_error']}_")
-            else:
-                for link in related_links:
-                    label = link.get("name") or link.get("url") or "(unnamed link)"
-                    line = f"- [{label}]({link['url']})" if link.get("url") else f"- {label}"
-                    extra = " — ".join(x for x in [link.get("status"), link.get("created_on")] if x)
-                    if extra:
-                        line += f" ({extra})"
-                    lines.append(line)
-            lines.append("")
 
         lines.append("**Notes:**")
         lines.append("")
@@ -204,7 +235,7 @@ def build_markdown(case_number, crm_results, branches, pull_requests,
     # open, or every crm_result errored) -- the section still needs to show
     # up somewhere rather than silently vanishing.
     if not ado_rendered:
-        lines.extend(ado_lines)
+        lines.extend(_related_links_lines(ado_error, ado_note, branches, pull_requests))
         lines.append("")
 
     if leftover_by_case:
