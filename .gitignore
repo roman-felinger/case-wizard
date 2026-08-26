@@ -11,7 +11,10 @@ __pycache__/
 .streamlit_config.json
 case-brief/.token_cache/
 case-brief/.last_urls.json
-case-brief/chrome-automation-profile/
+# No leading slash: matches at any depth, so a run launched from the wrong
+# cwd (creating this outside case-brief/) still gets ignored, not just the
+# normal case-brief/chrome-automation-profile/ location.
+chrome-automation-profile/
 
 # Generated output
 case-brief/case-briefs/*.md

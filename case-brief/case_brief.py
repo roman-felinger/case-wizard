@@ -49,7 +49,11 @@ TICKET_FIELD = "ticketnumber"
 CRM_HOST_CONTAINS = ["dynamics.com"]
 OUTPUT_DIR = "./case-briefs"
 CHROME_CFG = {
-    "profile_dir": "./chrome-automation-profile",
+    # Anchored to this script's own directory, not the process's cwd -- a run
+    # launched from outside case-brief/ (e.g. the repo root) would otherwise
+    # create an untracked, ungitignored Chrome profile wherever cwd happened
+    # to be instead of the gitignored case-brief/chrome-automation-profile/.
+    "profile_dir": os.path.join(HERE, "chrome-automation-profile"),
     "debug_port": 9222,
     "executable": None,
 }

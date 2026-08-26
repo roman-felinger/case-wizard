@@ -18,6 +18,13 @@ from playwright.sync_api import sync_playwright
 
 STATE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".last_urls.json")
 
+# Anchored to this file's location (case-brief/), not the process's current
+# working directory -- callers normally override this via cfg["profile_dir"]
+# (case_brief.py's CHROME_CFG does), but the fallback here needs the same
+# anchoring or a run launched from the wrong cwd creates an untracked,
+# ungitignored Chrome profile at whatever directory happened to be current.
+DEFAULT_PROFILE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "chrome-automation-profile")
+
 
 def load_last_urls():
     if os.path.exists(STATE_PATH):
@@ -75,7 +82,7 @@ def ensure_chrome(cfg):
     if _cdp_alive(port):
         return port, False
 
-    profile_dir = os.path.abspath(cfg.get("profile_dir", "./chrome-automation-profile"))
+    profile_dir = os.path.abspath(cfg.get("profile_dir", DEFAULT_PROFILE_DIR))
     os.makedirs(profile_dir, exist_ok=True)
     chrome_exe = find_chrome_exe(cfg.get("executable"))
 
@@ -148,7 +155,7 @@ def launch_headless_context(cfg, timeout=15000):
     chrome.exe missing, etc.) -- callers should treat that the same as
     "session not fresh" and fall back to the headed flow.
     """
-    profile_dir = os.path.abspath(cfg.get("profile_dir", "./chrome-automation-profile"))
+    profile_dir = os.path.abspath(cfg.get("profile_dir", DEFAULT_PROFILE_DIR))
     os.makedirs(profile_dir, exist_ok=True)
     chrome_exe = find_chrome_exe(cfg.get("executable"))
 
@@ -248,7 +255,7 @@ def close_chrome_window(cfg):
 
     # Graceful close didn't take -- force it via the process list, matched by
     # this profile's path so we don't touch your regular Chrome windows.
-    profile_dir = os.path.abspath(cfg.get("profile_dir", "./chrome-automation-profile"))
+    profile_dir = os.path.abspath(cfg.get("profile_dir", DEFAULT_PROFILE_DIR))
     ps_cmd = (
         "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
         f"Where-Object {{ $_.CommandLine -like '*{profile_dir}*' }} | "
