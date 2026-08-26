@@ -330,6 +330,47 @@ class GetActivitiesTests(unittest.TestCase):
         self.assertEqual(error, "HTTP 500")
 
 
+class GetRelatedLinksTests(unittest.TestCase):
+    def test_maps_fields_preferring_formatted_status(self):
+        page = FakePage("https://x", eval_result={crm_scrape.RELATED_LINKS_NAV_PROPERTY: [
+            {"art_name": "PR 20216 ✅ (CU-BTECH)",
+             "art_urllink": "https://dev.azure.com/artexis/P/_git/R/pullrequest/20216",
+             "statuscode": 1, "statuscode@OData.Community.Display.V1.FormattedValue": "Active",
+             "createdon": "2026-08-13T11:18:01Z"},
+        ]})
+        links, error = crm_scrape.get_related_links(page, "https://x", "id1")
+        self.assertIsNone(error)
+        self.assertEqual(links[0]["name"], "PR 20216 ✅ (CU-BTECH)")
+        self.assertEqual(links[0]["url"], "https://dev.azure.com/artexis/P/_git/R/pullrequest/20216")
+        self.assertEqual(links[0]["status"], "Active")
+        self.assertEqual(links[0]["created_on"], "2026-08-13T11:18:01Z")
+
+    def test_no_related_links_yields_an_empty_list_not_an_error(self):
+        page = FakePage("https://x", eval_result={crm_scrape.RELATED_LINKS_NAV_PROPERTY: []})
+        links, error = crm_scrape.get_related_links(page, "https://x", "id1")
+        self.assertEqual(links, [])
+        self.assertIsNone(error)
+
+    def test_missing_expand_key_does_not_crash(self):
+        page = FakePage("https://x", eval_result={})
+        links, error = crm_scrape.get_related_links(page, "https://x", "id1")
+        self.assertEqual(links, [])
+        self.assertIsNone(error)
+
+    def test_fetch_error_is_surfaced_not_raised(self):
+        page = FakePage("https://x", eval_result={"__error": "HTTP 500"})
+        links, error = crm_scrape.get_related_links(page, "https://x", "id1")
+        self.assertEqual(links, [])
+        self.assertEqual(error, "HTTP 500")
+
+    def test_expands_via_the_incident_record_using_the_known_nav_property(self):
+        page = FakePage("https://x", eval_result={crm_scrape.RELATED_LINKS_NAV_PROPERTY: []})
+        crm_scrape.get_related_links(page, "https://x", "id1")
+        called_url = page.last_eval_arg
+        self.assertIn("https://x/api/data/v9.2/incidents(id1)", called_url)
+        self.assertIn(f"$expand={crm_scrape.RELATED_LINKS_NAV_PROPERTY}", called_url)
+
+
 class FindTabsTests(unittest.TestCase):
     def test_find_authenticated_tabs_filters_by_host_substring(self):
         pages = [FakePage("https://a.dynamics.com/x"), FakePage("https://other.example.com/y")]
@@ -351,15 +392,25 @@ class IsAuthenticatedTests(unittest.TestCase):
         self.assertFalse(crm_scrape.is_authenticated(page))
 
 
-def _routes_for(case_value, metadata=None, notes=None, activities=None):
+def _routes_for(case_value, metadata=None, notes=None, activities=None, related_links=None):
     """Builds a FakePage `routes` dict that answers each of _finish's
-    fetches (the incident query itself, then metadata/notes/activities)
-    distinctly by URL substring, defaulting the ones a test doesn't care
-    about to an empty result."""
+    fetches (the incident query itself, then metadata/notes/activities/
+    related links) distinctly by URL substring, defaulting the ones a test
+    doesn't care about to an empty result.
+
+    Order matters: get_related_links' URL is itself an `incidents(...)`
+    fetch (an $expand on the incident record, not a separate entity set --
+    see RELATED_LINKS_NAV_PROPERTY), so its more specific route has to be
+    checked before the plain "incidents" one or it would never be reached.
+    """
     return {
         "EntityDefinitions": metadata if metadata is not None else {"value": []},
         "annotations": notes if notes is not None else {"value": []},
         "activitypointers": activities if activities is not None else {"value": []},
+        f"$expand={crm_scrape.RELATED_LINKS_NAV_PROPERTY}": (
+            {crm_scrape.RELATED_LINKS_NAV_PROPERTY: related_links} if related_links is not None
+            else {crm_scrape.RELATED_LINKS_NAV_PROPERTY: []}
+        ),
         "incidents": case_value,
     }
 
@@ -412,6 +463,17 @@ class LookupByTicketTests(unittest.TestCase):
         self.assertEqual(len(result["notes"]), 1)
         self.assertEqual(len(result["activities"]), 1)
         self.assertEqual(result["all_fields"], [])
+
+    def test_related_links_are_fetched_and_included_in_the_result(self):
+        case = {"incidentid": "id1", "ticketnumber": "T1"}
+        page = FakePage("https://org.crm.dynamics.com/main.aspx", routes=_routes_for(
+            {"value": [case]},
+            related_links=[{"art_name": "PR 1", "art_urllink": "https://dev.azure.com/o/P/_git/R/pullrequest/1"}],
+        ))
+        result = crm_scrape.lookup_by_ticket(page, "T1")
+        self.assertEqual(len(result["related_links"]), 1)
+        self.assertEqual(result["related_links"][0]["name"], "PR 1")
+        self.assertIsNone(result["related_links_error"])
 
 
 

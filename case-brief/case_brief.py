@@ -53,10 +53,18 @@ OUTPUT_DIR = "./case-briefs"
 def _collect_reference_text(crm_results):
     """Flattens every bit of text case-brief pulled from CRM -- title,
     description, every extra field crm_scrape.py found, every note, every
-    activity -- into one blob to scan for direct Azure DevOps PR/branch
-    links (see ado_api.parse_direct_references). Errors and non-string
-    values are skipped rather than raising: this is a best-effort scan,
-    not something that should ever fail the brief."""
+    activity, every entry in the Dev tab's Related links grid -- into one
+    blob to scan for direct Azure DevOps PR/branch links (see
+    ado_api.parse_direct_references). Errors and non-string values are
+    skipped rather than raising: this is a best-effort scan, not something
+    that should ever fail the brief.
+
+    Related links are included here (not just rendered on their own, see
+    report.py) so a PR attached directly in CRM gets the exact same
+    resolve-it-for-real treatment (title/status/created-by via
+    ado_api.get_pull_request) as one a support engineer merely pasted into
+    a note -- not just the raw name/URL CRM itself stored.
+    """
     parts = []
     for c in crm_results or []:
         if c.get("error"):
@@ -77,6 +85,11 @@ def _collect_reference_text(crm_results):
         for a in c.get("activities") or []:
             for key in ("subject", "description"):
                 v = a.get(key)
+                if isinstance(v, str):
+                    parts.append(v)
+        for rl in c.get("related_links") or []:
+            for key in ("name", "url"):
+                v = rl.get(key)
                 if isinstance(v, str):
                     parts.append(v)
     return "\n".join(parts)
@@ -140,9 +153,16 @@ def demo_data(case_number):
         "description": "Customer reports the invoicing module throws a dimension error when posting invoice 103042.",
         # Shows off crm_scrape.py's "get everything" fields -- what used to
         # be silently dropped by a curated $select list, e.g. an org's own
-        # internal-only custom field.
+        # internal-only custom field. Uses the real logical names
+        # (art_additionalpublicdescription/art_internaldescriptionandnotes,
+        # see report.DEFAULT_PROMOTED_FIELDS) so --demo actually exercises
+        # both promoted-field-under-Description paths, in their real order,
+        # instead of just landing in "Other CRM Fields" like a made-up
+        # field name would.
         "all_fields": [
-            {"logical_name": "new_internaldescription", "label": "Internal Description",
+            {"logical_name": "art_additionalpublicdescription", "label": "Dodatečný veřejný popis",
+             "value": "Public-facing summary: invoice posting is delayed while we investigate a dimension error."},
+            {"logical_name": "art_internaldescriptionandnotes", "label": "Interní popis & poznámky",
              "value": "Looks like the dimension default was cleared during the last data import -- check DIM-4021 before escalating."},
             {"logical_name": "caseorigincode", "label": "Origin", "value": "Phone"},
             {"logical_name": "resolvebydate", "label": "Resolve By", "value": "2026-08-25T09:12:00Z"},
@@ -157,6 +177,16 @@ def demo_data(case_number):
              "created_on": "2026-08-18T14:00:00Z", "description": "Confirmed the customer can reproduce it consistently."},
         ],
         "activities_truncated": False, "activities_error": None,
+        # Shows off the Dev tab's "Related links" grid (a PR attached
+        # directly in CRM, not just pasted into free text -- see
+        # crm_scrape.get_related_links). Points at the same PR #88 as the
+        # demo branches/pull_requests below for a consistent demo story.
+        "related_links": [
+            {"name": "PR 88 ✅ (CU-DEMO)",
+             "url": "https://dev.azure.com/example/proj/_git/invoicing-service/pullrequest/88",
+             "status": "Active", "created_on": "2026-08-18T09:20:00Z"},
+        ],
+        "related_links_error": None,
     }]
     branches = [
         {"project": "proj", "repo": "invoicing-service", "branch": "feature/12345-dimension-fix",

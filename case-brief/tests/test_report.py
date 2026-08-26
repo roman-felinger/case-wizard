@@ -85,7 +85,7 @@ class BuildMarkdownCrmSectionTests(unittest.TestCase):
             "all_fields": [{"logical_name": "new_internaldescription", "label": "Internal Description", "value": "agents only"}],
         }]
         md = report.build_markdown("T1", crm_results, [], [])
-        self.assertIn("**Internal Description:** agents only", md)
+        self.assertIn("**Internal Description** (`new_internaldescription`): agents only", md)
 
     def test_no_extra_fields_omits_the_other_crm_fields_heading(self):
         crm_results = [{"ticket_number": "T1", "all_fields": []}]
@@ -132,6 +132,42 @@ class BuildMarkdownCrmSectionTests(unittest.TestCase):
         self.assertIn("Could not load the activity timeline: HTTP 500", md)
 
 
+class BuildMarkdownRelatedLinksTests(unittest.TestCase):
+    """Covers the Dev tab's "Related links" grid (see
+    crm_scrape.get_related_links) -- a PR/branch attached directly in CRM,
+    rendered as its own subsection right after Description/promoted fields."""
+
+    def test_a_related_link_renders_as_a_markdown_link_with_status_and_date(self):
+        crm_results = [{"ticket_number": "T1", "related_links": [
+            {"name": "PR 20216 ✅ (CU-BTECH)", "url": "https://dev.azure.com/o/P/_git/R/pullrequest/20216",
+             "status": "Active", "created_on": "2026-08-13T11:18:01Z"},
+        ]}]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertIn("[PR 20216 ✅ (CU-BTECH)](https://dev.azure.com/o/P/_git/R/pullrequest/20216)", md)
+        self.assertIn("Active", md)
+        self.assertIn("2026-08-13T11:18:01Z", md)
+
+    def test_a_link_with_no_name_falls_back_to_the_url_as_the_label(self):
+        crm_results = [{"ticket_number": "T1", "related_links": [{"name": None, "url": "https://dev.azure.com/x"}]}]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertIn("[https://dev.azure.com/x](https://dev.azure.com/x)", md)
+
+    def test_no_related_links_omits_the_section_entirely(self):
+        crm_results = [{"ticket_number": "T1", "related_links": []}]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertNotIn("Linked Azure DevOps Items", md)
+
+    def test_absent_related_links_key_does_not_crash_or_render_the_section(self):
+        crm_results = [{"ticket_number": "T1"}]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertNotIn("Linked Azure DevOps Items", md)
+
+    def test_related_links_error_is_shown_instead_of_a_blank_section(self):
+        crm_results = [{"ticket_number": "T1", "related_links_error": "HTTP 403"}]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertIn("Could not load linked Azure DevOps items: HTTP 403", md)
+
+
 class BuildMarkdownPromotedFieldsTests(unittest.TestCase):
     """Covers promoted_fields: specific CRM custom fields (matched by
     logical_name) get their own proper subsection right after Description,
@@ -165,7 +201,27 @@ class BuildMarkdownPromotedFieldsTests(unittest.TestCase):
         self.assertIn("## Other CRM Fields", md)
         # Must come after the case's own details -- "pull down ... to the bottom of the brief".
         self.assertGreater(md.index("## Other CRM Fields"), md.index("### "))
-        self.assertIn("**Random Field:** some value", md)
+        # logical_name is shown alongside the label so a future promoted-field
+        # pick doesn't require guessing it (see report.py's leftover rendering).
+        self.assertIn("**Random Field** (`new_randomfield`): some value", md)
+
+    def test_default_promoted_fields_put_the_public_description_before_the_internal_one(self):
+        # The secondary/public description reads like a continuation of the
+        # normal Description field, so it belongs right after it and before
+        # the internal-only one -- see report.DEFAULT_PROMOTED_FIELDS.
+        crm_results = [{
+            "ticket_number": "T1",
+            "description": "Customer-visible summary.",
+            "all_fields": [
+                {"logical_name": "art_internaldescriptionandnotes",
+                 "label": "Interní popis & poznámky", "value": "internal notes"},
+                {"logical_name": "art_additionalpublicdescription",
+                 "label": "Dodatečný veřejný popis", "value": "public follow-up"},
+            ],
+        }]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertLess(md.index("Customer-visible summary."), md.index("Dodatečný veřejný popis"))
+        self.assertLess(md.index("Dodatečný veřejný popis"), md.index("Interní popis & poznámky"))
 
     def test_custom_promoted_fields_param_overrides_the_default(self):
         crm_results = [{
@@ -192,8 +248,8 @@ class BuildMarkdownPromotedFieldsTests(unittest.TestCase):
         # which case a leftover field came from once there's more than one.
         self.assertIn("### Case One", other_section)
         self.assertIn("### Case Two", other_section)
-        self.assertIn("**A:** 1", other_section)
-        self.assertIn("**B:** 2", other_section)
+        self.assertIn("**A** (`new_a`): 1", other_section)
+        self.assertIn("**B** (`new_b`): 2", other_section)
 
 
 class BuildMarkdownAdoNoteTests(unittest.TestCase):

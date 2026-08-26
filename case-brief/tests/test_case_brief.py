@@ -32,6 +32,19 @@ class CollectReferenceTextTests(unittest.TestCase):
         for expected in ("T", "D", "F", "NS", "NT", "AS", "AD"):
             self.assertIn(expected, text)
 
+    def test_gathers_related_link_names_and_urls(self):
+        # A PR attached directly in CRM's Dev tab grid (see
+        # crm_scrape.get_related_links) must feed the same direct-reference
+        # scan as one pasted into a note -- otherwise it'd only ever show up
+        # as raw CRM data, never resolved (title/status/created-by) via
+        # ado_api.get_pull_request.
+        crm_results = [{"related_links": [
+            {"name": "PR 20216 ✅ (CU-BTECH)", "url": "https://dev.azure.com/o/P/_git/R/pullrequest/20216"},
+        ]}]
+        text = cb._collect_reference_text(crm_results)
+        self.assertIn("PR 20216 ✅ (CU-BTECH)", text)
+        self.assertIn("https://dev.azure.com/o/P/_git/R/pullrequest/20216", text)
+
     def test_error_result_is_skipped(self):
         crm_results = [{"error": "boom", "url": "https://x"}]
         self.assertEqual(cb._collect_reference_text(crm_results), "")

@@ -22,6 +22,9 @@ Scrapes everything on the case, not a curated subset:
   - Notes and the Activity Timeline (phone calls, emails, tasks, ...), which
     the case *page* shows but which live in separate Dataverse entities
     (`annotation` / `activitypointer`) rather than on the incident record.
+  - The case page's "Dev" tab "Related links" grid (linked Azure DevOps
+    PRs/branches a support engineer attached directly, not just pasted into
+    free text) -- see RELATED_LINKS_NAV_PROPERTY below.
 """
 import html
 import re
@@ -84,6 +87,17 @@ _METADATA_CACHE = {}
 
 NOTES_TOP = 100
 ACTIVITIES_TOP = 50
+
+# The incident form's "Dev" tab "Related links" grid (e.g. a linked Azure
+# DevOps PR/branch) -- a plain custom entity/relationship, not documented or
+# discoverable from the incident record itself. Schema found via a live
+# investigation against a real case (2026-08-26; see CLAUDE.md's case-brief
+# section for how). Fetched via $expand on the incident record (get_related_links)
+# rather than a separate $filter query against art_relatedlinks' own entity set,
+# since $expand is what that investigation actually confirmed works -- and it
+# sidesteps ever needing art_relatedlinks' entity-set name or its lookup
+# attribute back to incident, only this relationship's navigation property name.
+RELATED_LINKS_NAV_PROPERTY = "art_relatedlinks_Incident_Incident"
 
 
 def reset_metadata_cache():
@@ -266,6 +280,34 @@ def get_activities(page, origin, incident_id):
     return activities, len(raw) >= ACTIVITIES_TOP, None
 
 
+def get_related_links(page, origin, incident_id):
+    """The case form's "Dev" tab "Related links" grid -- see
+    RELATED_LINKS_NAV_PROPERTY above for what this is and how it was found.
+
+    Returns (links, error). No cap/truncation -- unlike Notes/Activities
+    this grid is a handful of manually-added links at most in practice, not
+    an unbounded timeline.
+    """
+    url = (
+        f"{origin}/api/data/v9.2/incidents({incident_id})"
+        f"?$select=incidentid"
+        f"&$expand={RELATED_LINKS_NAV_PROPERTY}"
+        f"($select=art_name,art_urllink,statuscode,createdon;$orderby=createdon desc)"
+    )
+    data, error = _fetch(page, url)
+    if error:
+        return [], error
+
+    raw = data.get(RELATED_LINKS_NAV_PROPERTY) or []
+    links = [{
+        "name": r.get("art_name"),
+        "url": r.get("art_urllink"),
+        "status": r.get("statuscode" + _FORMATTED_SUFFIX) or r.get("statuscode"),
+        "created_on": r.get("createdon"),
+    } for r in raw]
+    return links, None
+
+
 def _to_result(case, origin, tab_url, labels=None, memo_fields=None):
     labels = labels or {}
     memo_fields = memo_fields or set()
@@ -295,8 +337,9 @@ def _to_result(case, origin, tab_url, labels=None, memo_fields=None):
 
 def _finish(page, origin, case):
     """Shared tail of lookup_by_ticket/extract: labels the raw record and
-    tacks on Notes + the Activity Timeline, which live in separate
-    Dataverse entities and aren't part of the incident record itself."""
+    tacks on Notes + the Activity Timeline + the Dev tab's Related links
+    grid, which all live in separate Dataverse entities/relationships and
+    aren't part of the incident record itself."""
     labels, memo_fields = get_attribute_metadata(page, origin)
     result = _to_result(case, origin, page.url, labels, memo_fields)
 
@@ -304,13 +347,16 @@ def _finish(page, origin, case):
     if incident_id:
         notes, notes_truncated, notes_error = get_notes(page, origin, incident_id)
         activities, activities_truncated, activities_error = get_activities(page, origin, incident_id)
+        related_links, related_links_error = get_related_links(page, origin, incident_id)
     else:
         notes, notes_truncated, notes_error = [], False, None
         activities, activities_truncated, activities_error = [], False, None
+        related_links, related_links_error = [], None
 
     result.update(
         notes=notes, notes_truncated=notes_truncated, notes_error=notes_error,
         activities=activities, activities_truncated=activities_truncated, activities_error=activities_error,
+        related_links=related_links, related_links_error=related_links_error,
     )
     return result
 

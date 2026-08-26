@@ -55,8 +55,10 @@ def _sanitize_freetext_for_markdown(text):
 # no config file (see case_brief.py's module docstring); a caller that
 # needs a different set can still pass its own `promoted_fields` directly.
 DEFAULT_PROMOTED_FIELDS = [
+    "art_additionalpublicdescription",  # "Dodatečný veřejný popis" -- secondary/public
+                                         # description; right after Description, before
+                                         # the internal one
     "art_internaldescriptionandnotes",  # "Interní popis & poznámky"
-    "art_additionalpublicdescription",  # "Dodatečný veřejný popis"
 ]
 
 
@@ -141,6 +143,22 @@ def build_markdown(case_number, crm_results, branches, pull_requests,
         if leftover:
             leftover_by_case.append((c, leftover))
 
+        related_links = c.get("related_links") or []
+        if related_links or c.get("related_links_error"):
+            lines.append("**Linked Azure DevOps Items (from CRM):**")
+            lines.append("")
+            if c.get("related_links_error"):
+                lines.append(f"_Could not load linked Azure DevOps items: {c['related_links_error']}_")
+            else:
+                for link in related_links:
+                    label = link.get("name") or link.get("url") or "(unnamed link)"
+                    line = f"- [{label}]({link['url']})" if link.get("url") else f"- {label}"
+                    extra = " — ".join(x for x in [link.get("status"), link.get("created_on")] if x)
+                    if extra:
+                        line += f" ({extra})"
+                    lines.append(line)
+            lines.append("")
+
         lines.append("**Notes:**")
         lines.append("")
         if c.get("notes_error"):
@@ -192,14 +210,16 @@ def build_markdown(case_number, crm_results, branches, pull_requests,
     if leftover_by_case:
         lines.append("## Other CRM Fields")
         lines.append("_Every other populated CRM field not already surfaced above -- uncurated, for the rare case "
-                      "it has what you need._")
+                      "it has what you need. Each field's `logical_name` is shown so you can find one worth "
+                      "promoting (see report.DEFAULT_PROMOTED_FIELDS) without having to guess it._")
         lines.append("")
         multiple_cases = len(leftover_by_case) > 1
         for c, leftover in leftover_by_case:
             if multiple_cases:
                 lines.append(f"### {c.get('title') or c.get('ticket_number') or c.get('id')}")
             for f in leftover:
-                lines.append(f"- **{f['label']}:** {_sanitize_freetext_for_markdown(str(f['value']))}")
+                lines.append(f"- **{f['label']}** (`{f['logical_name']}`): "
+                              f"{_sanitize_freetext_for_markdown(str(f['value']))}")
             lines.append("")
 
     return "\n".join(lines)

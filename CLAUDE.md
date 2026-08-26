@@ -121,13 +121,38 @@ migration" below.
 
 **Azure DevOps (`lib/ado_api.py`).** Real REST API via a self-service PAT
 (`AZDO_PAT` env var). `run_ado_lookup` flattens everything CRM scraping just found
-(title, description, every extra field, every note, every activity) and scans it via
-`parse_direct_references` for actual ADO PR/branch links a support engineer pasted
-while working the case. Any found are resolved directly (`get_pull_request`/
-`get_branch`) — no searching. There is no broader org-wide search: this tool only
-ever talks to one org (`ado_api.ORG_URL`, fixed), and a case that never mentions its
-own work either doesn't have any yet or is faster to ask about than to
-brute-force search for.
+(title, description, every extra field, every note, every activity, every Related
+link — see next paragraph) and scans it via `parse_direct_references` for actual ADO
+PR/branch links a support engineer pasted or attached while working the case. Any
+found are resolved directly (`get_pull_request`/`get_branch`) — no searching. There
+is no broader org-wide search: this tool only ever talks to one org
+(`ado_api.ORG_URL`, fixed), and a case that never mentions its own work either
+doesn't have any yet or is faster to ask about than to brute-force search for.
+
+**Related links (the case form's "Dev" tab, 2026-08-26).** Besides links merely
+pasted into free text, the case form has its own "Dev" tab with a "Související
+odkazy" (Related links) grid — entries like "PR 20216 ✅ (CU-BTECH)" pointing at a
+`dev.azure.com` PR. This isn't part of the incident record or any field
+`crm_scrape.py` already fetched; it's a separate custom entity/relationship,
+`art_relatedlinks`, found by live investigation (querying `incident`'s registered
+1:N/N:N relationship metadata, then `$expand`-ing each one against a real case until
+one came back with data — see the entity's own name and fields below).
+`crm_scrape.get_related_links` fetches it via `$expand=art_relatedlinks_Incident_Incident`
+directly on the incident record (`RELATED_LINKS_NAV_PROPERTY`) rather than a
+`$filter` query against `art_relatedlinks`'s own entity set, since that's what the
+investigation actually confirmed works — it also means never needing to know that
+entity's real entity-set name or its lookup attribute back to incident, only this
+relationship's navigation property name. Each entry's `art_name` (display label,
+often carrying a status emoji/tag CRM users typed by hand) and `art_urllink` (the
+actual PR/branch URL) are exposed as `related_links` on the case result and: (1)
+rendered as their own "Linked Azure DevOps Items (from CRM)" subsection by
+`report.py`, right after Description/promoted fields, showing the raw CRM label
+alongside the link; and (2) fed into `case_brief.py`'s `_collect_reference_text`
+alongside notes/activities/fields, so `run_ado_lookup` resolves them the exact same
+way as a link merely pasted somewhere — real title/status/created-by via
+`ado_api.get_pull_request`, in the existing Azure DevOps section, not just the raw
+CRM label. Not yet verified against more than the one case used to find it — the
+Dev tab grid is likely rare/empty on most cases, same caveat as Notes/Activities.
 
 The brief no longer suggests a repo to clone/branch commands for — that guess moved
 to case-guide (see below), which is the thing that actually needs it; case-brief's
@@ -191,14 +216,27 @@ force-inserts a standalone warning block right after the guide's title.
 5. `find_example_guide` picks the most recently written other guide as a
    tone/structure anchor (`--no-example` disables).
 6. `gather_suggested_repo` resolves the repo/branch to suggest (see above).
-7. `build_prompt` fills a fixed 5-section template; `call_claude` shells out to
+7. `build_prompt` fills a fixed 6-section template; `call_claude` shells out to
    `claude -p` non-interactively, piping the prompt on stdin, resolved via
    `shutil.which` (not `shell=True`). Runs as the `case-guide-writer` agent via
    `--agent` (`--no-agent` falls back to claude's plain default persona). A
    `subprocess.run(..., timeout=...)` is a safety net in case an unexpected
    permission prompt ever hangs it.
 8. `_looks_like_guide` is a loose sanity check on `claude`'s output — used only to
-   print a warning, never to block writing the file.
+   print a warning, never to block writing the file. `_has_difficulty_rating` is the
+   same pattern for the difficulty line (see below).
+
+**Implementation difficulty rating (2026-08-26).** Section 2 of `PROMPT_TEMPLATE`
+asks `claude` for one line right after the case summary —
+`**Implementation Difficulty:** X/10 -- <short reason>`. X has to come from a fixed
+10-band rubric (`DIFFICULTY_RUBRIC`, inlined into every prompt regardless of
+`--agent`/`--no-agent`) rather than `claude`'s own free-floating judgment per call —
+the whole point is that the same kind of case scores the same way across separate
+guides/cases, which a fresh, unanchored 1-10 guess every time would not reliably do.
+`case-guide-writer.md`'s persona doc reinforces the same rubric/brevity expectation
+for when the agent *is* used, but the rubric itself lives in `PROMPT_TEMPLATE` so it
+applies either way. `_has_difficulty_rating` is a loose regex sanity check (same
+warn-only pattern as `_looks_like_guide`) in case `claude` drops the line.
 
 **Skip-if-unchanged:** if a guide already exists and is newer than its brief, `main`
 returns early instead of re-spending an ADO search + a `claude` call. No override
@@ -332,8 +370,13 @@ than kept as a second, parallel path:
   `activitypointers`/`EntityDefinitions` haven't specifically been exercised live
   yet, ideally against a case with a memo-type/lookup/option-set field populated.
   Make sure AZDO content is actually reachable and that direct-reference links
-  found in the case are investigated properly (not just detected). Make sure the
-  CRM's internal description field is retrieved and displayed properly in the brief.
+  found in the case are investigated properly (not just detected).
+  Internal description: already wired (`report.DEFAULT_PROMOTED_FIELDS` includes
+  `art_internaldescriptionandnotes`, promoted into its own subsection right after
+  Description whenever the field is populated — see `case-brief`'s own section
+  above); `--demo`'s sample data now uses the real logical name too (2026-08-26) so
+  running it actually exercises that path instead of the field landing in "Other
+  CRM Fields" under a made-up name. Still not exercised against a real case.
 - **case-guide:** verify the customer↔project fuzzy match
   (`repo_suggest._fuzzy_score`/`best_fuzzy_match`) against how your org's actual ADO
   projects are named vs. how CRM customer names look — the threshold/lead values may
