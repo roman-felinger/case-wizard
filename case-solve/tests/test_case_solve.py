@@ -44,6 +44,7 @@ def _args(**overrides):
         no_implement=False,
         dry_run=False,
         yes=False,
+        ignore_readiness=False,
         skip_tests=False,
         skip_lint=False,
         skip_build=False,
@@ -141,6 +142,47 @@ class ConfigMergePrecedenceTests(unittest.TestCase):
         self.assertFalse(cfg["run_build"])  # CLI wins here
 
 
+class CheckReadinessTests(unittest.TestCase):
+    """Own copy of case-guide's _READINESS_RE (see case_guide.py's
+    "Readiness check") -- these lock in the same "Yes/missing == ready,
+    No == blocked" contract case_guide.py's own PROMPT_TEMPLATE establishes."""
+
+    def test_explicit_yes_is_ready(self):
+        text = "# Case T1\n\n**Ready for Implementation:** Yes\n\nMore guide text."
+        self.assertEqual(cs.check_readiness(text), (True, None))
+
+    def test_explicit_no_is_not_ready_and_captures_the_reason(self):
+        text = "# Case T1\n\n**Ready for Implementation:** No -- waiting on customer reply\n"
+        self.assertEqual(
+            cs.check_readiness(text), (False, "waiting on customer reply")
+        )
+
+    def test_no_without_a_reason_still_reports_not_ready(self):
+        text = "**Ready for Implementation:** No\n"
+        ready, reason = cs.check_readiness(text)
+        self.assertFalse(ready)
+        self.assertIsNone(reason)
+
+    def test_missing_marker_defaults_to_ready(self):
+        # An older guide, or claude dropped the line -- case-guide's own
+        # write_and_open already warns about this; case-solve doesn't
+        # additionally hard-block on it.
+        text = "# Case T1\n\nJust a guide with no readiness line at all."
+        self.assertEqual(cs.check_readiness(text), (True, None))
+
+    def test_marker_far_past_the_scan_window_is_treated_as_missing(self):
+        # Mirrors case-guide's own text[:1000] loose-check window.
+        text = "x" * 1000 + "\n**Ready for Implementation:** No -- too late\n"
+        self.assertEqual(cs.check_readiness(text), (True, None))
+
+    def test_match_is_case_insensitive_on_yes_no(self):
+        self.assertEqual(
+            cs.check_readiness("**Ready for Implementation:** yes\n"), (True, None)
+        )
+        ready, _ = cs.check_readiness("**Ready for Implementation:** no -- reason\n")
+        self.assertFalse(ready)
+
+
 class ExtractRepoSuggestionTests(unittest.TestCase):
     def test_extracts_github_url(self):
         text = "## Get set up\n\n```\ngit clone https://github.com/acme/widgets.git\n```\n"
@@ -214,8 +256,8 @@ class SafeNameAndGuideFilenameTests(unittest.TestCase):
         self.assertEqual(cs._safe_name("!!!"), "unlabeled")
 
     def test_guide_filename_uses_the_sanitized_name(self):
-        self.assertEqual(cs.guide_filename("T1"), "case-T1.md")
-        self.assertEqual(cs.guide_filename("../T1"), "case-.._T1.md")
+        self.assertEqual(cs.guide_filename("T1"), "guide-T1.md")
+        self.assertEqual(cs.guide_filename("../T1"), "guide-.._T1.md")
 
 
 class FindGuideTests(unittest.TestCase):
@@ -230,18 +272,18 @@ class FindGuideTests(unittest.TestCase):
         open(os.path.join(self.guide_dir, name), "w").close()
 
     def test_exact_match(self):
-        self._write("case-T2611845.md")
+        self._write("guide-T2611845.md")
         path = cs.find_guide("T2611845", self.guide_dir)
-        self.assertEqual(os.path.basename(str(path)), "case-T2611845.md")
+        self.assertEqual(os.path.basename(str(path)), "guide-T2611845.md")
 
     def test_substring_fallback_when_no_exact_match(self):
-        self._write("case-T2611845.md")
+        self._write("guide-T2611845.md")
         path = cs.find_guide("T261", self.guide_dir)  # not an exact filename
-        self.assertEqual(os.path.basename(str(path)), "case-T2611845.md")
+        self.assertEqual(os.path.basename(str(path)), "guide-T2611845.md")
 
     def test_ambiguous_substring_match_exits_rather_than_guessing(self):
-        self._write("case-T3330.md")
-        self._write("case-T3331.md")
+        self._write("guide-T3330.md")
+        self._write("guide-T3331.md")
         with self.assertRaises(SystemExit):
             cs.find_guide("T333", self.guide_dir)
 
@@ -257,7 +299,7 @@ class FindGuideTests(unittest.TestCase):
         # An unrelated file sitting one level up must never be found.
         parent = os.path.dirname(self.guide_dir)
         outside = tempfile.NamedTemporaryFile(
-            dir=parent, suffix=".md", prefix="case-ESCAPED", delete=False
+            dir=parent, suffix=".md", prefix="guide-ESCAPED", delete=False
         )
         outside.close()
         try:
@@ -275,7 +317,7 @@ class YesFlagNonInteractiveTests(unittest.TestCase):
     called at all -- proving it, not just checking outcomes."""
 
     def _run_main(self, argv, guide_text, input_mock=None):
-        fake_guide_path = Path("case-guides") / "case-T1.md"
+        fake_guide_path = Path("guides") / "guide-T1.md"
         mock_workspace = mock.Mock(repo_dir="C:/fake/repo", branch_name="case/T1")
         mock_wm_instance = mock.Mock()
         mock_wm_instance.setup.return_value = mock_workspace
@@ -317,7 +359,7 @@ class YesFlagNonInteractiveTests(unittest.TestCase):
         self.assertEqual(kwargs["repo_url"], "https://github.com/acme/fallback.git")
 
     def test_yes_without_repo_or_suggestion_raises_system_exit(self):
-        fake_guide_path = Path("case-guides") / "case-T1.md"
+        fake_guide_path = Path("guides") / "guide-T1.md"
         input_mock = mock.Mock(
             side_effect=AssertionError("input() must never be called under --yes")
         )
@@ -361,6 +403,78 @@ class YesFlagNonInteractiveTests(unittest.TestCase):
         )
         self.assertEqual(result, 1)
         mock_wm_cls.assert_not_called()
+
+
+class ReadinessGateTests(unittest.TestCase):
+    """The social readiness gate must stop main() before it even asks for a
+    repo -- there's no point setting up a workspace for work a developer
+    can't start yet. Each test patches builtins.input to raise if called at
+    all, proving the not-ready path never reaches the interactive prompt
+    either (same style as YesFlagNonInteractiveTests)."""
+
+    NOT_READY_TEXT = (
+        "# Case T1\n\n**Ready for Implementation:** No -- waiting on customer reply\n\n"
+        "## Before You Start -- Social Steps\n\n1. Ask the customer to confirm X.\n"
+    )
+
+    def _run_main(self, argv, guide_text):
+        fake_guide_path = Path("guides") / "guide-T1.md"
+        mock_wm_cls = mock.Mock()
+        input_mock = mock.Mock(
+            side_effect=AssertionError("input() must never be called once the gate stops the run")
+        )
+        with mock.patch.object(sys, "argv", ["case_solve.py"] + argv), \
+             mock.patch("case_solve.shutil.which", side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None), \
+             mock.patch("case_solve.find_guide", return_value=fake_guide_path), \
+             mock.patch("case_solve.read_guide", return_value=guide_text), \
+             mock.patch("lib.workspace.WorkspaceManager", mock_wm_cls), \
+             mock.patch("builtins.input", input_mock):
+            result = cs.main()
+        return result, mock_wm_cls, input_mock
+
+    def test_not_ready_guide_stops_before_workspace_setup(self):
+        result, mock_wm_cls, input_mock = self._run_main(
+            ["T1", "--repo", "https://github.com/acme/widgets.git"],
+            guide_text=self.NOT_READY_TEXT,
+        )
+        self.assertEqual(result, 1)
+        mock_wm_cls.assert_not_called()
+        input_mock.assert_not_called()
+
+    def test_not_ready_guide_stops_even_under_yes(self):
+        # --yes only skips the confirmation prompt -- it must not also
+        # bypass the readiness gate.
+        result, mock_wm_cls, _ = self._run_main(
+            ["T1", "--yes", "--repo", "https://github.com/acme/widgets.git"],
+            guide_text=self.NOT_READY_TEXT,
+        )
+        self.assertEqual(result, 1)
+        mock_wm_cls.assert_not_called()
+
+    def test_ignore_readiness_proceeds_past_a_not_ready_guide(self):
+        result, mock_wm_cls, _ = self._run_main(
+            ["T1", "--yes", "--ignore-readiness", "--repo",
+             "https://github.com/acme/widgets.git", "--no-implement"],
+            guide_text=self.NOT_READY_TEXT,
+        )
+        self.assertEqual(result, 0)
+        mock_wm_cls.assert_called_once()
+
+    def test_ready_guide_is_unaffected(self):
+        result, mock_wm_cls, _ = self._run_main(
+            ["T1", "--yes", "--repo", "https://github.com/acme/widgets.git", "--no-implement"],
+            guide_text="**Ready for Implementation:** Yes\n",
+        )
+        self.assertEqual(result, 0)
+        mock_wm_cls.assert_called_once()
+
+    def test_missing_marker_is_unaffected(self):
+        result, mock_wm_cls, _ = self._run_main(
+            ["T1", "--yes", "--repo", "https://github.com/acme/widgets.git", "--no-implement"],
+            guide_text="No readiness line in this guide at all.",
+        )
+        self.assertEqual(result, 0)
+        mock_wm_cls.assert_called_once()
 
 
 if __name__ == "__main__":

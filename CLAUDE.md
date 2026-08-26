@@ -20,19 +20,23 @@ python case-guide/case_guide.py 12345         # smoke test: reads the checked-in
 
 python case-solve/case_solve.py T2611845 --repo <url> --show-plan   # preview plan, no apply
 python case-solve/case_solve.py T2611845 --repo <url> --dry-run     # preview changes, no commit
+
+python case-getter/case_getter.py             # brief + guide every new, unassigned CRM case
+python case-getter/case_getter.py --dry-run   # just list what it would pick up
 ```
 
 ```
-python run_tests.py                              # all three stages' test suites (must run as separate processes)
+python run_tests.py                              # every stage's test suite (must run as separate processes)
 python -m unittest discover -s tests -v           # from any one stage's own directory, or repo root for case_wizard.py's own tests
 ```
 
-Test counts: case-brief 142, case-guide 90, case-solve 141, root (`case_wizard.py`) 29
-— all mocked, no network. Deliberately not exhaustive over every CLI flag or every
-low-risk rendering/plumbing branch; those are easily eyeballed with `--demo`-style
-manual runs. What no test suite here can cover: a real `claude` call, a live Azure
-DevOps org/CRM, and (case-solve) a real end-to-end implementation run against a real
-repo.
+Test counts: case-brief 169, case-guide 90, case-solve 141, case-getter 26,
+root (`case_wizard.py`) 29 — all mocked, no network (case-getter's own tests mock
+subprocess/CRM calls; see its own section below for how it was verified live once).
+Deliberately not exhaustive over every CLI flag or every low-risk rendering/plumbing
+branch; those are easily eyeballed with `--demo`-style manual runs. What no test
+suite here can cover: a real `claude` call, a live Azure DevOps org/CRM, and
+(case-solve) a real end-to-end implementation run against a real repo.
 
 ## Shared package (`shared/`)
 
@@ -51,6 +55,27 @@ There used to also be `shared/editor.py` (open a file in VS Code after a run, wi
 `--no-open` flag on every stage to suppress it). Removed entirely — cut to shed the
 implicit "must have VS Code on PATH" requirement; it was a convenience, not a
 dependency any stage's actual job needs.
+
+## Output filenames (2026-08-26)
+
+case-brief and case-guide used to both write `case-<code>.md` into differently
+named folders (`case-briefs/`, `case-guides/`) — the same filename for two
+different kinds of file, distinguishable only by which folder it happened to be
+sitting in. Renamed so the filename itself says what it is: case-brief now writes
+`brief-<code>.md` into `case-brief/briefs/`; case-guide now writes
+`guide-<code>.md` into `case-guide/guides/`. case-getter's own run reports moved
+from `case-getter/case-gets/` to `case-getter/gets/` to match (still one file per
+run, `get-<timestamp>.md`, not per case — see case-getter's own section). Every
+place that constructs or parses either pattern moved together:
+`report.write_and_open` (case-brief); `case_guide.py`'s `find_brief`/`DEFAULTS`/
+the guide's own `write_and_open` stem; `case_solve.py`'s `guide_filename`/
+`find_guide`/`GUIDE_DIR`; and `case_getter.py`'s `BRIEF_DIR`/`GUIDE_DIR`/
+`REPORT_DIR`/`existing_brief_numbers` (construct *and* parse — it regexes
+case-brief's filenames back into ticket numbers). The checked-in demo files
+were renamed to match: `case-brief/briefs/brief-12345.md`,
+`case-guide/guides/guide-12345.md`. `lib/writer.py::guide_filename` itself
+needed no change — it never hardcoded the `"case-"`/`"guide-"` prefix, the
+caller (`case_guide.py`) already supplies the whole stem.
 
 ## case-brief
 
@@ -154,23 +179,120 @@ Dev tab grid is likely rare/empty on most cases, same caveat as Notes/Activities
 
 **Report structure — "## Related Links" / "## Details" (2026-08-26).** The brief's
 top-level sections were consolidated so each case's own heading is followed by
-exactly one "## Related Links" section (everything that points at outside work:
-Azure DevOps branches/PRs resolved from a direct reference in the CRM case, the
-Dev tab's `related_links` grid above, and finally the case's own Helpdesk portal
-link, in that order — see `report._related_links_lines`/`HELPDESK_LINK_FIELD`) and
-one "## Details" section (Description, the promoted description fields, Notes,
-Activity Timeline). Whatever was actually found in either section is listed as its
-own line/bullet; whichever of that section's own members came up empty (with no
-error — an error already explains itself) are named together in one combined line
-at the end of that section — e.g. `_No branches, pull requests, related links, and
-a Helpdesk link found for this case._` or `_No Dodatečný veřejný popis, notes, and
-activity timeline entries found for this case._` (see `report._join_and`) — rather
+exactly one "## Related Links" section and one "## Details" section (Description,
+the promoted description fields, Notes, Activity Timeline).
+
+Related Links renders, in this fixed order: (1) the case's own CRM record link
+(`Case link:`), (2) the case's own Helpdesk portal link (`Helpdesk link:`) — both
+always available on a real case, so neither is ever reported as missing; (3) the Dev
+tab's `related_links` grid; (4) Azure DevOps branches/PRs resolved from a direct
+reference found elsewhere in the CRM case (see `report._related_links_lines`/
+`HELPDESK_LINK_FIELD`). (3) and (4) are genuinely optional — a case may not have
+either yet. Only (3) is ever reported missing, though, as one combined line — e.g.
+`_No linked Azure DevOps items found for this case._` (see `report._join_and`,
+still there for when a future category needs combining with it). Branches/PRs
+coming back empty is deliberately NOT reported at all, even when literally true —
+a case simply not having referenced its own work yet isn't worth a dedicated
+"not found" callout every time. A related link's own bullet has no status/
+created-on shown (CRM's own snapshot from whenever it was attached, not refreshed
+since, unlike the ADO section which fetches live) — a plain-text label with the URL
+itself as the hyperlink, same convention as the Helpdesk link (so it's clickable
+and still readable/copyable without clicking through, rather than a descriptive
+label hiding the URL from view). The Helpdesk link field (`art_helpdesklink`) is
+matched by logical_name the same way `DEFAULT_PROMOTED_FIELDS` is, but rendered as
+a link in Related Links instead of a text block under Details, and excluded from
+"Other Populated CRM Fields" the same way promoted fields are.
+
+Details' own members are combined the same way — whichever came up empty (with no
+error) named together in one line, e.g. `_No Additional Public Description,
+Internal Description, Notes, and Activity Timeline found for this case._` — rather
 than either a single blanket "nothing found" line that stays silent about which
 specific thing is missing, or a separate "not found" line per missing member
-cluttering the section. The Helpdesk link field (`art_helpdesklink`) is matched by
-logical_name the same way `DEFAULT_PROMOTED_FIELDS` is, but rendered as a link in
-Related Links instead of a text block under Details, and excluded from "Other CRM
-Fields" the same way promoted fields are.
+cluttering the section.
+
+**No duplicate PR/branch linking between related_links and the ADO section
+(2026-08-26).** A PR attached in CRM's Dev tab grid used to also get resolved and
+listed again in the ADO branches/PRs section — its URL was part of the text
+`case_brief.py`'s `_collect_reference_text` scanned for direct references, so it
+always turned up there too. Fixed two ways: `_collect_reference_text` no longer
+includes `related_links` at all (superseded by the fix below, and scanning it just
+meant resolving-then-discarding); `run_ado_lookup`'s new `_related_link_refs` parses
+just the `related_links` URLs the same way `ado_api.parse_direct_references` parses
+everything else, and excludes any branch/PR already covered by them (from wherever
+it was found — a note, a field, anywhere) before resolving. Matched by
+(project, id) for PRs — Azure DevOps PR ids are unique org-wide — and (project,
+branch) for branches, deliberately NOT including repo: the CRM-stored related-link
+URL and the one resolved via the ADO API can represent the same repo as a different
+string (a repo GUID vs. its human-readable name), so comparing on repo too would
+miss real duplicates. `--demo` bypasses `run_ado_lookup` (no real API calls), so its
+own `related_links`/`branches`/`pull_requests` sample data is kept deliberately
+non-overlapping by hand instead, so the demo doesn't visually reintroduce the very
+duplication this dedup exists to prevent.
+
+**`art_descriptionadditionalpublic`, not `art_additionalpublicdescription`
+(2026-08-26).** `DEFAULT_PROMOTED_FIELDS`' secondary/public-description entry had
+the wrong logical name (word order swapped) — confirmed wrong against a real case's
+brief, where the field was landing in "Other Populated CRM Fields" under its raw
+Czech label instead of getting promoted. Fixed in `report.py`, `case_brief.py`'s
+demo data, and the matching tests.
+
+**Case link (2026-08-26).** `crm_scrape._to_result` builds the case's own CRM
+record deep link (`main.aspx?appid=...&forceUCI=1&pagetype=entityrecord&etn=
+incident&id=...`) — the `appid` (`crm_scrape.CRM_APP_ID`, this org's Customer
+Service model-driven app) and `forceUCI=1` were added 2026-08-26 so the link opens
+directly in that app instead of Dynamics falling back to a default app or prompting
+to pick one. `report._related_links_lines` renders it as the very first bullet in
+"## Related Links" (`Case link: [url](url)`, same plain-label/URL-as-hyperlink
+style as the Helpdesk link) — it's a detail of the case record itself, not one more
+piece of related work, so it's also deliberately never part of that section's
+"missing" line (crm_scrape.py always populates it once a case is found, so there's
+nothing to
+report absent).
+
+**Description folded into the combined "missing" line too (2026-08-26).** An empty
+Description used to still render its own `**Description:**` header followed by
+`_(none)_`. It's now treated like the other optional Details members -- omitted
+entirely and named in the combined "missing" line instead (first, ahead of the
+promoted fields/Notes/Activity Timeline, matching its position in the rendered
+Details -- see `build_markdown`), so a case with nothing to show doesn't clutter
+the brief with an empty header + placeholder for something that isn't there.
+
+**English labels for known CRM fields (2026-08-26).** The CRM org's own field labels
+are mostly Czech. `DEFAULT_PROMOTED_FIELDS`' two known fields get a fixed English
+label (`report._PROMOTED_FIELD_ENGLISH_LABELS`) that overrides whatever label the
+metadata call returned, used both for the field's own subsection header and for
+Details' combined "missing" line. `art_internaldescriptionandnotes` is labeled just
+"Internal Description", not "Internal Description & Notes" -- the latter read as one
+combined item with the case's own Notes (the activity/annotation notes, a distinct
+thing rendered separately, see `missing_details.append("Notes")` -- capitalized to
+match, since it now sits in the same combined "missing" line as the Title-Case field
+labels). Activity Timeline's own entry in that same line
+(`missing_details.append("Activity Timeline")`) is capitalized for the same reason.
+"## Estimates & Totals" fields are matched by label, not logical_name (org rollup
+fields whose logical names aren't known ahead of time). This started as a broad "any
+field whose label contains total/estimate/celkem/odhad" heuristic with a separate
+skip-list and a Czech→English translation table, but that swept in noise (kilometers,
+price, dispatch counts, a rollup's own "(stav)"/"(datum poslední aktualizace)"
+metadata) the case form's own "Estimate & Totals" widget doesn't show. Replaced
+2026-08-26 with a fixed curated set of exactly the four fields that widget shows —
+Estimate, Billable Hours, Non-Billable Hours, Total Hours, rendered in that order
+regardless of the order the CRM returned them in (`report._ESTIMATE_CATEGORY_ORDER`).
+`report._classify_estimate_field`/`_ESTIMATE_FIELD_MATCHERS` match each field's label
+against that fixed set (case-insensitive substring/equality, tolerant of the label's
+Czech word order varying between the case form's own label and what the
+EntityDefinitions metadata call returns for the same field — observed: "Fakturované
+hodiny celkem" on the form vs. "Celkem fakturované hodiny" from metadata), skipping a
+rollup's own "(stav)"/"...aktualizace" metadata sub-fields so they're never mistaken
+for the real value. No blurb and no `logical_name` shown per bullet, unlike "Other
+Populated CRM Fields" — this section is meant to be skimmed, not used to hunt for a
+field worth promoting. A field that doesn't match one of the four (kilometers, price,
+dispatch counts, the "Odhad schválen" approver lookup, ...) isn't specially dropped
+anymore — it just isn't pulled out of "Other Populated CRM Fields", the same as any
+other uncurated field.
+
+**"Other CRM Fields" renamed "Other Populated CRM Fields" (2026-08-26), no blurb.**
+Its explanatory italic line ("Every other populated CRM field not already surfaced
+above...") is gone — the renamed heading says what it is on its own.
 
 The brief no longer suggests a repo to clone/branch commands for — that guess moved
 to case-guide (see below), which is the thing that actually needs it; case-brief's
@@ -263,6 +385,149 @@ flag — delete the existing guide file to force a regenerate.
 **Config merge order:** `DEFAULTS` → `config.json` (deep-merged, `_comment` stripped)
 → CLI flags.
 
+## case-getter (2026-08-26)
+
+A helper on top of case-brief and case-guide, not a third independent stage: it
+finds cases worth briefing/guiding, then runs those two stages' own scripts as
+subprocesses exactly as `case_wizard.py all <code> --stop-after guide` would, one
+case at a time. Not part of `case_wizard.py`'s `all` chain (that chain is
+per-case_number; case-getter operates over however many cases it finds) — it's
+dispatched via `case_wizard.py getter` as an extra entry in `SCRIPTS`, deliberately
+outside `STAGES`.
+
+**"New" and "relevant", made concrete.** New = no brief already on disk
+(`case-brief/briefs/brief-<code>.md`) — re-briefing/re-guiding a case that
+already has one is what the normal per-case commands are for.
+Relevant = still Active and either still owned by the CRM's default
+unassigned-case team (nobody's claimed it yet) **or** already owned by whoever is
+signed in (2026-08-26 addition -- yours already, not someone else's). "Accessible
+to me" needed no extra filter code: the Dataverse Web API call is already scoped to
+the signed-in user's own security role (see case-brief's Dataverse API access
+investigation above), so the listing query only ever returns what that user could
+already see in the CRM UI.
+
+**Investigated live before writing the filter (2026-08-26), same as case-brief's
+own Dataverse work: an unfiltered query over active cases showed every one of them
+owned either by a real `systemuser` or by a `team` called "Helpdesk e-mail" —**
+confirming that team *is* the "nobody's touched this yet" default every new case
+starts under, and that incidents expose it directly via `_owningteam_value` (not
+just the generic, polymorphic `_ownerid_value`). `crm_scrape.list_new_cases`
+resolves that team's id by name at runtime (`_resolve_team_id`, a `teams?$filter=
+name eq '...'` call) rather than hardcoding its GUID like `CRM_APP_ID` — so
+recreating the team in this org doesn't need a code change here too — then filters
+`incidents` on `statecode eq 0 and (_owningteam_value eq {team_id} or
+_owninguser_value eq {my_user_id})`, `my_user_id` resolved via
+`get_current_user_id`'s `WhoAmI` call on the same token/page rather than a
+parameter a caller would otherwise have to already know. A `WhoAmI` failure
+degrades to the team-only filter (each case's `owned_by_me` then just always
+False) rather than failing the whole listing. Verified against live data: of 26
+currently-active cases owned by that team, all 26 were genuinely untouched (status
+"Nový"/New, no other owner ever assigned); of the 4 active cases owned by the
+signed-in user, `list_new_cases` correctly flagged all 4 as `owned_by_me: True` —
+and a real `case_getter.py --limit 1` run against one of the unassigned ones
+produced a correct brief, a correct guide (including a parseable
+`**Implementation Difficulty:**` line), and a correct triage summary line, end to
+end.
+
+**`$select`-ing the bare `owninguser` attribute silently misbehaves (2026-08-26
+finding).** First attempt selected `owninguser` (matching how `prioritycode`/
+`statuscode`/etc. are selected by their bare logical name) and got back a case
+where a case you owned still showed `owned_by_me: False` for every row. Live
+comparison showed `$select=owninguser` alone returns the *entire* record (every
+field on the incident, as if $select were ignored) while `$select=ticketnumber,
+owninguser` together returns *neither* — no owner field at all, silently, not an
+error. The fix: select `_owninguser_value` (the underscore-prefixed nav-property-
+value form), which behaves correctly alone or combined with other fields — the
+same documented form `_customerid_value` right next to it in the same `$select`
+already relied on, that this addition should have matched from the start. Filed as
+a concrete gotcha in `list_new_cases`'s own `$select` line, not just here, since
+the failure mode (wrong data, no error) is exactly the kind that's easy to miss in
+review.
+
+Deliberately a curated `$select` in `list_new_cases`, unlike `lookup_by_ticket`'s
+"get everything" — this is a triage list across possibly dozens of cases, not one
+case's full brief, so pulling every field for every row would be slow and mostly
+wasted. Capped at `crm_scrape.NEW_CASES_TOP` (200), with hitting the cap surfaced as
+a warning rather than silently dropping the rest — same "signal, don't silently
+truncate" pattern as `NOTES_TOP`/`ACTIVITIES_TOP`.
+
+**Where the listing logic lives.** `crm_scrape.list_new_cases` (the actual OData
+query) and `case_brief.list_relevant_cases` (auth + wiring, mirroring
+`run_crm_lookup`'s own shape) both live in case-brief, since that's who already owns
+the Dataverse connection/`CRM_ORIGIN` — case-getter imports `case_brief` directly for
+this one call rather than a third copy of Dataverse auth plumbing. Running the
+brief/guide stages themselves still goes through `subprocess` (`run_stage`, same
+shape as `case_wizard.py`'s own `run_one`), not a function call into either
+script — each stage stays independently invocable/dependency-isolated, and a
+`case-brief`/`case-guide` failure on one case can't take the whole run down with it.
+
+**Reading a finished brief/guide back for the summary line is a filesystem
+contract, not an import** — `_CASE_TITLE_RE`/`_CUSTOMER_RE`/`_DIFFICULTY_RE` are a
+small, deliberate duplication of the same three patterns case-guide's own
+`_extract_case_title`/`_extract_customer`/`_DIFFICULTY_RE` already use against the
+brief/guide's fixed rendering shape — the same tradeoff (independence over DRY)
+"Known accepted duplication" below documents for case-brief's and case-guide's own
+`ado_api.py` copies.
+
+**One case failing doesn't stop the run.** A failed `case_brief.py` call skips
+`case_guide.py` for that case (nothing to guide yet) and is reported in the
+summary with an error note; a failed `case_guide.py` call still reports the
+brief's own title/customer, just with no difficulty line. `main`'s exit code is
+non-zero if *any* case failed, so a scripted caller can tell — but every other
+case in the batch still gets processed.
+
+No config file, same as case-brief — `--limit`/`--dry-run`/`--sort` are the only
+flags; the unassigned-team name is a fixed constant
+(`crm_scrape.DEFAULT_UNASSIGNED_TEAM_NAME`), not something this tool ever needs to
+vary per run.
+
+**Always lists every relevant case, not just new ones (2026-08-26 addition).**
+`find_relevant_cases` (renamed from `find_new_relevant_cases`) no longer filters
+its result down to cases needing (re)processing — it returns *every* relevant
+case, each tagged `is_new`/`stale` so callers can tell three situations apart:
+no brief yet, a brief that's out of date (see `is_stale` — compares the CRM
+record's own `modifiedon` against a hidden marker `report.build_markdown` stamps
+into every brief), and a case that already has a current brief/guide. Only the
+first two actually get case-brief/case-guide (re)run; a case already up to date
+is left alone and its existing title/customer/difficulty is just read back off
+disk (`summarize`) for the triage list — cheap, no subprocess call. This exists
+because a run that finds nothing new/stale used to print "no relevant cases
+found", which is a useless answer when there's still real work sitting in CRM
+that just hasn't changed since it was last briefed — the triage list is now
+"what's relevant right now", not "what changed since last time". `--limit` still
+caps how many new/stale cases actually get (re)processed in one run, but no
+longer hides the rest of the relevant cases from the output — an already-current
+case is free to include (a file read) so it's never counted against the limit;
+a new/stale case that *is* skipped for hitting the limit still shows up in the
+list with whatever's already on disk (nothing, for a case never processed
+before). `_tag` renders the three situations as ", stale" / ", up to date" /
+no suffix appended to the existing "mine"/"unassigned" ownership tag.
+
+**Sorted by difficulty by default (2026-08-26 addition).** `--sort` used to
+default to `"none"` (plain processing order) and only affected a full run, since
+a `--dry-run` listing had no difficulty yet to sort by (nothing had been
+guided). Now that up-to-date cases carry a real difficulty read straight off an
+existing guide, sorting is meaningful in a dry run too — `--sort` defaults to
+`"easiest"` and applies to both a full run's summary and a `--dry-run` listing;
+`"hardest"`/`"none"` are still available. A case with no difficulty yet (never
+guided, or a guide that failed to generate) always sorts last regardless of
+direction (`sort_rows`/`_difficulty_num`) — "unknown" isn't the same as
+"easiest".
+
+**Run reports (2026-08-26).** Every run (including `--dry-run`) writes a Markdown
+report to `case-getter/gets/get-<timestamp>.md` (gitignored, same as the other
+stages' generated output) — the same title/customer/difficulty/ownership
+information `print_summary`/the dry-run listing already put on the console, so a
+triage session leaves something on disk to refer back to. One file per *run*, not
+per case (`get-YYYYMMDD-HHMMSS.md`) — unlike case-brief/case-guide/case-solve,
+whose output is inherently per-case, case-getter's own output is a run's worth of
+triage across however many cases it found, so a per-case filename doesn't fit.
+`build_report_markdown`/`write_report` are pure functions of `(rows, dry_run,
+timestamp)` — `main` computes one `datetime.now()` per run and derives both the
+human-readable timestamp (in the file) and the filesystem-safe one (in the
+filename) from it, rather than calling `datetime.now()` twice and risking the two
+drifting apart across a slow run.
+
 ## case-solve
 
 Independent from case-brief and case-guide — reads the guide file case-guide
@@ -273,24 +538,46 @@ repo, plus edge cases like merge conflicts or missing tools) hasn't happened yet
 **Pipeline (`main` in `case_solve.py`):**
 
 1. Find guide (exact match, then glob fallback)
-2. Extract repo suggestion (`git clone` link in guide text)
-3. Prompt for repo URL (suggest from guide, ask user to confirm/override; `--yes`
+2. Social readiness gate — stop here if the guide says a developer can't start
+   alone yet (see "Social readiness gate" below)
+3. Extract repo suggestion (`git clone` link in guide text)
+4. Prompt for repo URL (suggest from guide, ask user to confirm/override; `--yes`
    requires `--repo` explicitly rather than guessing, since a non-interactive caller
    has no terminal to answer a prompt with)
-4. Workspace setup — clone/fetch, create `case/<case-number>` branch
-5. Install dependencies — auto-detect Python/Node/Rust/.NET
-6. Implementation — Claude reads guide + repo structure, generates a plan, then
+5. Workspace setup — clone/fetch, create `case/<case-number>` branch
+6. Install dependencies — auto-detect Python/Node/Rust/.NET
+7. Implementation — Claude reads guide + repo structure, generates a plan, then
    file-by-file steps, then applies them
-7. Verification — run tests/build/lint (auto-detect available tools)
-8. Commit — group changes by category (tests, dependencies, config, docs, source,
+8. Verification — run tests/build/lint (auto-detect available tools)
+9. Commit — group changes by category (tests, dependencies, config, docs, source,
    other), one commit per group
-9. Report — verification checklist, next steps
+10. Report — verification checklist, next steps
 
 **Key modules:** `lib/workspace.py` (clone/branch/dependencies), `lib/implementer.py`
 (Claude-guided implementation), `lib/verifier.py` (auto-detect + run tests/lint/
 build), `lib/committer.py` (git ops, logical grouping), `lib/report.py` (checklist
 generation), `.claude/agents/case-solver.md` (repo root — persona for Claude's
 implementation guidance).
+
+**Social readiness gate (2026-08-26).** case-guide's prompt asks `claude` for a
+`**Ready for Implementation:** Yes` / `No -- <reason>` line right after the case
+summary, plus a "## Before You Start -- Social Steps" section when the answer is
+No (see case-guide's own section above). case-solve's `check_readiness` parses
+that exact line back out of the guide it just read (`case_solve._READINESS_RE`, an
+independent copy of case-guide's `_READINESS_RE` -- same "own copy, not shared"
+tradeoff as the two `ado_api.py`'s, see "Known accepted duplication" below; keep
+the marker regex itself in sync between the two if the wording ever changes) and,
+on No, `main` stops immediately -- before even resolving/prompting for a repo --
+printing the reason and pointing at the guide's own Social Steps section, rather
+than setting up a workspace and cloning a repo for work a developer can't start
+yet. `--ignore-readiness` overrides it for when those steps have actually been
+done since the guide was written; `--yes` (skips the interactive confirmation)
+deliberately does NOT also imply this -- they answer different questions. A guide
+with no readiness marker at all (an older guide, or `claude` dropped the line
+despite the prompt asking for it) is treated as ready, matching case-guide's own
+`_has_readiness_marker` warning, which already tells the operator to double-check
+by hand in that case rather than this gate additionally hard-blocking a case that
+may well be fine to start.
 
 **Two-stage Claude interaction (plan → steps → apply)**, not one shot: guards
 against silent truncation on complex repos, lets you visually inspect steps before
@@ -425,3 +712,8 @@ than kept as a second, parallel path:
   dependency managers (poetry, pipenv, yarn, mix); smarter test selection
   (by-file/by-tag); smarter default-branch detection (main vs. master vs. develop);
   track/replay/diff case-solve runs across a repo's history.
+- **case-getter:** the unassigned-team filter has only been checked against this
+  one org's data (26 active cases, all genuinely unclaimed) — worth re-confirming
+  after this org's CRM setup changes (a renamed/re-created default team, a second
+  queue added). No override for the team name today (fixed constant, see
+  case-getter's own CLAUDE.md section) if that ever needs to vary.

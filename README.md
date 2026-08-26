@@ -11,6 +11,12 @@ standalone Python script with its own `-h` for the full flag list, plus a root
 `case_wizard.py` for running them from one place. There's no app or GUI — this is run
 from a terminal.
 
+A fourth script, `case-getter`, finds the work in the first place: it lists every
+CRM case nobody has picked up yet (plus every active case already assigned to
+whoever is signed in) and runs brief + guide for whichever of those don't already
+have a brief, so you get a ready-to-triage list instead of having to go looking
+case by case.
+
 ## Setup
 
 ```bash
@@ -60,6 +66,28 @@ each stage's script in a subprocess, in order, the same as running them by hand.
 `--repo` is only ever forwarded to solve; use `--brief-arg`/`--guide-arg`/`--solve-arg`
 (repeatable) for anything else a given stage's own `-h` lists.
 
+### 0. case-getter — find new work automatically
+
+Lists every active CRM case that's either still owned by the CRM's default
+unassigned-case team ("Helpdesk e-mail" — nobody's claimed it yet) or already
+owned by whoever is signed in — and, for whichever of those don't already have a
+brief on disk, runs case-brief then case-guide for it (same as `case_wizard.py all
+<code> --stop-after guide`, one case at a time; one case failing doesn't stop the
+rest). Prints a triage summary at the end: case number, whether it's unclaimed or
+already yours, title, customer, and the implementation difficulty rating pulled
+out of the guide it just wrote. Every run (including `--dry-run`) also writes that
+same summary to `case-getter/gets/get-<timestamp>.md`.
+
+```bash
+python case-getter/case_getter.py                # brief + guide every new, unassigned case
+python case_wizard.py getter                      # same thing
+python case-getter/case_getter.py --dry-run       # just list what would be picked up
+python case-getter/case_getter.py --limit 3       # cap how many cases to process this run
+```
+
+Needs the same CRM/Azure DevOps/`claude` access as case-brief and case-guide — it's
+just automating running both of those over more than one case at a time.
+
 ### 1. case-brief — gather context
 
 Looks up the case from CRM via the Dataverse Web API, authenticated with OAuth
@@ -82,7 +110,7 @@ and sign in with your normal CRM account. Later runs are silent: the token is
 cached (`case-brief/.token_cache/`, gitignored) and silently refreshed. No admin
 app-registration step is needed (see `CLAUDE.md`'s Dataverse API section for why).
 
-Output: `case-brief/case-briefs/case-<number>.md`
+Output: `case-brief/briefs/brief-<number>.md`
 
 ### 2. case-guide — write the walkthrough
 
@@ -103,7 +131,7 @@ Requires a brief already written by case-brief and the `claude` CLI on PATH.
 Optional `config.json` (see `case-guide/config.example.json`) for model/timeout/agent
 overrides and the Azure DevOps org.
 
-Output: `case-guide/case-guides/case-<number>.md`
+Output: `case-guide/guides/guide-<number>.md`
 
 ### 3. case-solve — implement it
 
@@ -123,6 +151,11 @@ Requires the guide from case-guide, `claude` CLI (logged in), git, and network a
 to clone the repo. `--yes` skips the repo/confirmation prompts (required for any
 scripted/non-interactive caller). Optional `config.json` (see
 `case-solve/config.example.json`) for `run_tests`/`run_lint`/`run_build`/`claude.*`.
+
+If the guide says the case isn't ready for a developer to start alone yet (waiting
+on a customer reply, a manager sign-off, etc.), case-solve stops before touching
+anything and points you at the guide's own "Before You Start" section — pass
+`--ignore-readiness` once that's actually been resolved.
 
 Auto-detected per project:
 
@@ -151,17 +184,18 @@ Each stage's own tests run independently (they can't be collected in one pytest
 process — see `run_tests.py`'s docstring for why):
 
 ```bash
-python run_tests.py              # all three stages
+python run_tests.py              # every stage
 python run_tests.py brief guide  # just these
 ```
 
 ## Status
 
-- **Brief:** CRM (Dataverse Web API, OAuth) + ADO working, 123 tests (`case-brief/tests/`)
-- **Guide:** stable, 84 tests (`case-guide/tests/`)
+- **Brief:** CRM (Dataverse Web API, OAuth) + ADO working, 169 tests (`case-brief/tests/`)
+- **Guide:** stable, 90 tests (`case-guide/tests/`)
 - **Solve:** MVP — clone/branch/dependency-install verified, 141 tests
   (`case-solve/tests/`); a real end-to-end Claude implementation run against a live
   repo is the main thing left to exercise
+- **Getter:** working, verified against live CRM data; 26 tests (`case-getter/tests/`)
 
 See `CLAUDE.md` for architecture notes and the troubleshooting section below if
 something's not working.

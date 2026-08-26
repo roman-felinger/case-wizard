@@ -34,6 +34,7 @@ Usage:
 import argparse
 import copy
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -49,7 +50,7 @@ from shared.safe_name import safe_name as _safe_name
 
 HERE = Path(__file__).parent
 CONFIG_PATH = HERE / "config.json"
-GUIDE_DIR = HERE.parent / "case-guide" / "case-guides"
+GUIDE_DIR = HERE.parent / "case-guide" / "guides"
 SOLVES_DIR = HERE / "case-solves"
 
 # Default configuration
@@ -90,7 +91,7 @@ def apply_cli_overrides(cfg, args):
 def guide_filename(case_number):
     """Expected guide filename for a case number."""
     safe = _safe_name(case_number)
-    return f"case-{safe}.md"
+    return f"guide-{safe}.md"
 
 
 def find_guide(case_number, guide_dir):
@@ -104,7 +105,7 @@ def find_guide(case_number, guide_dir):
 
     # Try substring match (glob)
     safe = _safe_name(case_number)
-    pattern = f"case-*{safe}*.md"
+    pattern = f"guide-*{safe}*.md"
     matches = list(guide_dir.glob(pattern))
 
     if len(matches) == 1:
@@ -128,6 +129,32 @@ def read_guide(path):
     """Read and parse the guide file."""
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
+
+
+# Own copy of case-guide's _READINESS_RE (see case_guide.py's
+# "Readiness check" section of PROMPT_TEMPLATE) -- same "independent copy,
+# not shared" tradeoff as the two ado_api.py's (CLAUDE.md's "Known accepted
+# duplication"). Keep the marker regex itself in sync with case-guide's if
+# the wording ever changes; the trailing "-- <reason>" capture is this
+# side's own addition, used only to surface the reason in the stop message.
+_READINESS_RE = re.compile(r"(?im)\*\*Ready for Implementation:\*\*\s*(Yes|No)\b(?:\s*--\s*(.+))?")
+
+
+def check_readiness(guide_text):
+    """Whether the guide says a developer can start alone. Returns
+    (ready: bool, reason: str or None).
+
+    No marker at all -- an older guide, or claude dropped the line despite
+    PROMPT_TEMPLATE asking for it -- is treated as ready. case-guide's own
+    write_and_open path already warns the operator to double-check by hand
+    when the marker is missing (see _has_readiness_marker); a missing line
+    here isn't reason enough to hard-block a real case that's actually fine
+    to start."""
+    match = _READINESS_RE.search(guide_text[:1000])
+    if not match or match.group(1).lower() == "yes":
+        return True, None
+    reason = (match.group(2) or "").strip() or None
+    return False, reason
 
 
 def extract_repo_suggestion(guide_text):
@@ -242,6 +269,12 @@ def build_parser():
         help="Skip the interactive yes/no confirmation before making changes "
              "(for scripted/non-interactive callers)",
     )
+    modes.add_argument(
+        "--ignore-readiness",
+        action="store_true",
+        help="Implement even if the guide's \"Ready for Implementation\" line says No "
+             "(use once its \"Before You Start -- Social Steps\" have actually been done)",
+    )
 
     # Verification
     verify = parser.add_argument_group("verification (auto-detect, can override)")
@@ -280,6 +313,20 @@ def main():
     guide_path = find_guide(args.case_number, GUIDE_DIR)
     guide_text = read_guide(guide_path)
     print(f"✓ Found guide: {guide_path}")
+
+    # Social readiness gate: a guide can say a developer can't start alone
+    # yet (needs a customer reply, a manager sign-off, ...) -- see
+    # case_guide.py's "Readiness check". Stop here, before even asking for a
+    # repo, rather than setting up a workspace for work that can't start.
+    ready, reason = check_readiness(guide_text)
+    if not ready and not args.ignore_readiness:
+        print("\n" + "=" * 70)
+        print("NOT READY FOR IMPLEMENTATION")
+        print("=" * 70)
+        print(f"\nThe guide marks this case as not ready: {reason or 'no reason given'}")
+        print(f"See \"## Before You Start -- Social Steps\" in {guide_path} for what to do first.")
+        print("\nOnce that's resolved, re-run with --ignore-readiness to proceed anyway.")
+        return 1
 
     # Resolve repo URL
     suggested_repo = extract_repo_suggestion(guide_text)
