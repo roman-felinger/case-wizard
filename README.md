@@ -8,8 +8,8 @@ Brief (gather context) → Guide (AI walkthrough) → Solve (auto-implement)
 
 Three independent CLI scripts (`case-brief`, `case-guide`, `case-solve`), each a
 standalone Python script with its own `-h` for the full flag list, plus a root
-`case_wizard.py` for running them from one place. There's no app or GUI — this is run from
-a terminal.
+`case_wizard.py` for running them from one place. There's no app or GUI — this is run
+from a terminal.
 
 ## Setup
 
@@ -34,8 +34,8 @@ python -m playwright install chromium   # one-time, ~115 MB -- used for CRM scra
 
 ## Usage
 
-Each stage on its own, from its own folder or via `case_wizard.py` from the root — both are
-equivalent:
+Each stage on its own, from its own folder or via `case_wizard.py` from the root — both
+are equivalent:
 
 ```bash
 python case-brief/case_brief.py T2611845
@@ -56,54 +56,91 @@ python case_wizard.py all T2611845 --stop-after guide        # brief + guide onl
 python case_wizard.py all -h                                 # per-stage passthrough, etc.
 ```
 
-A failed stage stops the chain — there's no point running guide off a brief that
-never got written. `case_wizard.py all` is just a thin wrapper: it runs each stage's script
-in a subprocess, in order, the same as running them by hand. `--repo` is only ever
-forwarded to solve; use `--brief-arg`/`--guide-arg`/`--solve-arg` (repeatable) for
-anything else a given stage's own `-h` lists.
+A failed stage stops the chain. `case_wizard.py all` is just a thin wrapper: it runs
+each stage's script in a subprocess, in order, the same as running them by hand.
+`--repo` is only ever forwarded to solve; use `--brief-arg`/`--guide-arg`/`--solve-arg`
+(repeatable) for anything else a given stage's own `-h` lists.
 
-case-guide and case-solve each optionally take a `config.json` (see their
-`config.example.json`) for settings without a CLI flag. case-brief has no config
-file at all — it only ever talks to one org, one CRM, and its own dedicated
-Chrome profile, all fixed constants in its source.
+### 1. case-brief — gather context
 
-## The Three Stages
-
-### 1. case-brief
-Gathers case context from CRM + Azure DevOps.
-Output: `case-brief/case-briefs/case-<number>.md`
+Scrapes the case from CRM (browser automation, `--skip-browser` to disable) and
+resolves any Azure DevOps PR/branch links already pasted into the case
+(`--skip-ado` to disable). No config file — org/CRM/Chrome-profile are fixed
+constants (this tool only ever talks to one org and one CRM).
 
 ```bash
-python case-brief/case_brief.py --demo        # fake data, no setup needed -- fastest smoke test
-python case-brief/case_brief.py T2611845      # real run: CRM lookup + ADO search
-python case-brief/case_brief.py -h            # full flag list
+python case-brief/case_brief.py --demo                 # fake data, fastest smoke test
+python case-brief/case_brief.py T2611845                # real run
+python case-brief/case_brief.py T2611845 --skip-browser # ADO only, no Chrome
+python case-brief/case_brief.py -h
 ```
 
-### 2. case-guide
-Turns the brief into a step-by-step walkthrough via a headless `claude` call.
-Output: `case-guide/case-guides/case-<number>.md`
+The first real run opens a visible sign-in window against a dedicated Chrome profile
+(`case-brief/chrome-automation-profile/`, gitignored — not your regular browser,
+since modern browsers block external tools from reading their session cookies).
+Later runs reuse that session headlessly as long as it's still valid.
+
+Output: `case-brief/case-briefs/case-<number>.md`
+
+### 2. case-guide — write the walkthrough
+
+Turns the brief into a step-by-step implementation guide via a headless `claude`
+call, running as the `case-guide-writer` agent persona
+(`.claude/agents/case-guide-writer.md`). No dry-run mode — every run makes a real
+`claude` call. If a guide already exists and is newer than its brief, the run is
+skipped rather than re-spending an ADO search + a `claude` call (delete the guide
+file to force a regenerate).
 
 ```bash
 python case-guide/case_guide.py 12345               # smoke test: reads the checked-in demo brief
 python case-guide/case_guide.py T2611845 --model opus
-python case-guide/case_guide.py -h                   # full flag list
+python case-guide/case_guide.py -h
 ```
 
-No demo/dry-run mode — every run needs a real brief on disk and makes a real `claude`
-call. `case-brief/case-briefs/case-12345.md` (case-brief's own `--demo` output) is
-checked into git so this stage has something to run against without any CRM/ADO
-setup.
+Requires a brief already written by case-brief and the `claude` CLI on PATH.
+Optional `config.json` (see `case-guide/config.example.json`) for model/timeout/agent
+overrides and the Azure DevOps org.
 
-### 3. case-solve
-Clones the repo, implements the guide's plan, runs tests/lint/build, commits as it
-goes. Never pushes — you review and push yourself.
-Output: `case-solve/case-solves/case-<number>/VERIFICATION_CHECKLIST.md`
+Output: `case-guide/case-guides/case-<number>.md`
+
+### 3. case-solve — implement it
+
+Clones the repo, has Claude implement the guide's plan, runs tests/lint/build, and
+commits as it goes, grouped by category. Never pushes — you review and push
+yourself. MVP: the two-stage Claude plan→apply flow is unit-tested but not yet
+exercised end-to-end against a real repo.
 
 ```bash
 python case-solve/case_solve.py T2611845 --repo <url> --show-plan   # preview plan, no apply
 python case-solve/case_solve.py T2611845 --repo <url> --dry-run     # preview changes, no commit
 python case-solve/case_solve.py T2611845 --repo <url>               # full run
-python case-solve/case_solve.py -h                                  # full flag list
+python case-solve/case_solve.py -h
+```
+
+Requires the guide from case-guide, `claude` CLI (logged in), git, and network access
+to clone the repo. `--yes` skips the repo/confirmation prompts (required for any
+scripted/non-interactive caller). Optional `config.json` (see
+`case-solve/config.example.json`) for `run_tests`/`run_lint`/`run_build`/`claude.*`.
+
+Auto-detected per project:
+
+| | Dependency install | Tests | Lint | Build |
+|---|---|---|---|---|
+| Python | `requirements.txt` → pip | pytest / unittest | black, pylint | `setup.py build` |
+| Node.js | `package.json` → npm | npm test | eslint | npm build |
+| Rust | `Cargo.toml` → cargo | cargo test | cargo clippy | cargo build |
+| .NET | `*.csproj` → dotnet restore | dotnet test | — | dotnet build |
+
+A project using different tools won't get auto-verified — check it manually.
+
+Output: `case-solve/case-solves/case-<number>/VERIFICATION_CHECKLIST.md`, cloned repo
+at `case-solve/case-solves/repos/<repo-name>/` (branch `case/<code>`, reused across
+runs). Review it, then:
+
+```bash
+cd case-solve/case-solves/repos/<repo>
+git push -u origin case/T2611845
+# open a PR, mention the case number in the title
 ```
 
 ## Tests
@@ -118,10 +155,48 @@ python run_tests.py brief guide  # just these
 
 ## Status
 
-- **Brief:** CRM + ADO working, 122 tests (`case-brief/tests/`)
-- **Guide:** stable, 88 tests (`case-guide/tests/`)
+- **Brief:** CRM + ADO working, 120 tests (`case-brief/tests/`)
+- **Guide:** stable, 84 tests (`case-guide/tests/`)
 - **Solve:** MVP — clone/branch/dependency-install verified, 141 tests
   (`case-solve/tests/`); a real end-to-end Claude implementation run against a live
   repo is the main thing left to exercise
 
-See `TROUBLESHOOT.md` if something's not working and you're not sure why.
+See `CLAUDE.md` for architecture notes and the troubleshooting section below if
+something's not working.
+
+## Troubleshooting
+
+**`claude` CLI not found / not working.** Install from
+[claude.com/claude-code](https://claude.com/claude-code), then run `claude login`. If
+case-guide/case-solve fail with a real `claude` error rather than "not found", log in
+again — a session can expire.
+
+**CRM shows not logged in / case-brief can't read the case.** Run
+`python case-brief/case_brief.py <case-number>` — a browser window opens pointed at
+CRM (later runs may skip the window and reuse the session headlessly if it's still
+valid). Log in if prompted; the session persists in
+`case-brief/chrome-automation-profile/`, so this is normally a one-time thing.
+If the window flashes and closes instantly, a previous run left the profile locked —
+delete `case-brief/chrome-automation-profile/` and try again. Pass
+`--keep-browser-open` if you don't want the window to auto-close when case-brief
+finishes.
+
+**Azure DevOps errors (case-brief, case-guide).** Both are hardcoded to one org
+(`https://dev.azure.com/artexis`; case-guide still takes `--org-url` for a one-off
+different org). Check `AZDO_PAT` is set and hasn't expired (PATs max out at 1 year),
+with scopes **Code (Read)** and **Project and Team (Read)**.
+
+**A stage fails.** Brief: almost always a CRM login issue (see above) — `--demo`
+skips CRM/ADO entirely to check the script itself still runs. Guide: needs an
+existing brief for that case number and a working `claude` login — there's no
+dry-run mode. Solve: needs a real, reachable git clone URL and an existing guide;
+`--show-plan` previews Claude's plan without applying anything, `--dry-run` applies
+without committing.
+
+**Network / firewall.** If CRM or ADO time out rather than showing a clear error:
+check VPN if your org requires one, and that `*.dynamics.com` and `dev.azure.com`
+aren't blocked.
+
+**Still stuck.** Run the failing stage with `-h` to confirm you're passing what it
+expects, then re-run it directly and read the actual error — each stage prints
+exactly what failed rather than a generic message.
