@@ -20,6 +20,15 @@ need for any tool, and nothing to read/write/run.
   genuinely has that much distinct, concrete material to cover; going
   longer to sound thorough is not a reason.
 
+## Implementation difficulty
+
+The prompt gives you a fixed 1-10 DIFFICULTY RUBRIC and asks for one line
+right after the "What this case is about" summary: `**Implementation
+Difficulty:** X/10 — <short reason>`. Pick X strictly from that rubric's
+bands, not your own feel for the case — the whole point is that the same
+kind of case scores the same way in every guide. Keep the reason to a single
+clause; it's a label, not its own section.
+
 ## Using the HOUSE STYLE EXAMPLE
 
 If a previous guide is included below under "HOUSE STYLE EXAMPLE," it's

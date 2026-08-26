@@ -289,6 +289,45 @@ class AddGuessWarningTests(unittest.TestCase):
         self.assertIn("guessed, not confirmed", result)
 
 
+class BuildPromptDifficultyRubricTests(unittest.TestCase):
+    """build_prompt must always inline the fixed DIFFICULTY_RUBRIC and the
+    instruction to use it -- this is what keeps difficulty ratings
+    comparable across separate claude calls/cases (see DIFFICULTY_RUBRIC's
+    own docstring-equivalent comment in PROMPT_TEMPLATE)."""
+
+    def _prompt(self):
+        return cg.build_prompt("T1", "brief text", "suggested repo", "ado detail", "example guide")
+
+    def test_the_fixed_rubric_bands_are_present_verbatim(self):
+        prompt = self._prompt()
+        self.assertIn(cg.DIFFICULTY_RUBRIC, prompt)
+        self.assertIn("1  -- Trivial", prompt)
+        self.assertIn("10 -- Highest", prompt)
+
+    def test_instructs_claude_to_output_a_difficulty_line(self):
+        prompt = self._prompt()
+        self.assertIn("**Implementation Difficulty:** X/10", prompt)
+        self.assertIn("don't invent your own scale", prompt)
+
+
+class HasDifficultyRatingTests(unittest.TestCase):
+    def test_true_when_the_expected_line_is_present(self):
+        text = "# Case T1\n\n## What this case is about\nSomething.\n\n**Implementation Difficulty:** 4/10 -- small, one module.\n"
+        self.assertTrue(cg._has_difficulty_rating(text))
+
+    def test_false_when_missing_entirely(self):
+        text = "# Case T1\n\n## What this case is about\nSomething.\n"
+        self.assertFalse(cg._has_difficulty_rating(text))
+
+    def test_false_for_a_number_not_shaped_like_x_of_10(self):
+        text = "# Case T1\n\nThis case affects 4 customers.\n"
+        self.assertFalse(cg._has_difficulty_rating(text))
+
+    def test_matches_regardless_of_which_of_the_ten_bands(self):
+        text = "**Implementation Difficulty:** 10/10 -- architecture-level.\n"
+        self.assertTrue(cg._has_difficulty_rating(text))
+
+
 class ExtractFromBriefTests(unittest.TestCase):
     """case-brief's lib/report.py always renders a case's title as the first
     "### " heading and its customer right after it as a "- **Customer:**

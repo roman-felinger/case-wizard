@@ -300,6 +300,18 @@ def _truncate(text, limit, label="live Azure DevOps detail"):
     )
 
 
+DIFFICULTY_RUBRIC = """1  -- Trivial: a one-line/config value change, no real logic, obviously correct on sight.
+2  -- Very small: a few lines in one file, follows an existing pattern exactly.
+3  -- Small: one file/module, straightforward logic, tests follow an existing pattern.
+4  -- Small-medium: a couple of files, minor new logic, needs some care but no new concepts.
+5  -- Medium: multiple files, real logic, needs to understand existing code before touching it.
+6  -- Medium-high: multiple modules/layers, non-trivial edge cases, meaningful new tests needed.
+7  -- High: cross-cutting change touching several subsystems, or a fix in unfamiliar code, needs careful verification.
+8  -- High: new abstractions/data flows, related bugs visible in the branches/PRs above, real regression risk.
+9  -- Very high: ambiguous requirements or root cause unclear from the material, wide blast radius, extensive verification needed.
+10 -- Highest: the case is fundamentally underspecified or needs an architecture-level decision beyond what a guide can fully spec."""
+
+
 PROMPT_TEMPLATE = """You are helping a support engineer who has just picked up a case and needs a \
 plain-language plan to actually go solve it -- assume they may not have touched this codebase before.
 
@@ -312,24 +324,31 @@ to finish. Cover, in this order:
 
 1. **What this case is about** -- a plain-language summary of the customer's problem, pulled \
    from the case description below.
-2. **Get set up** -- the exact `git clone` / `cd` / `git checkout -b` commands to run (use the \
+2. **Implementation difficulty** -- one line, right after the summary: \
+   `**Implementation Difficulty:** X/10 -- <short reason>`, where X is picked from the fixed \
+   DIFFICULTY RUBRIC below. Use those bands as given -- don't invent your own scale or wording \
+   for them, so difficulty stays comparable across different guides/cases.
+3. **Get set up** -- the exact `git clone` / `cd` / `git checkout -b` commands to run (use the \
    suggested repo/branch below if present; otherwise say plainly that no repo has been \
    identified yet and what to do about it). If the suggested repo below is marked as guessed \
    (fuzzy-matched from the customer name, not confirmed in Azure DevOps), you MUST carry that \
    warning into this section verbatim -- never drop it or present a guess as a confirmed repo.
-3. **What's already been tried** -- if there are related branches/PRs below, summarize concretely \
+4. **What's already been tried** -- if there are related branches/PRs below, summarize concretely \
    what they changed (from their commit messages / changed files / review comments) and whether \
    they look finished, still in review, or abandoned. If there's nothing related, say so plainly.
-4. **What still needs to be developed, and how** -- a concrete, numbered plan grounded in the \
+5. **What still needs to be developed, and how** -- a concrete, numbered plan grounded in the \
    actual case description and whatever the related branches/PRs reveal about the codebase's \
    shape -- not generic advice. Call out open questions if the material below isn't specific \
    enough to be concrete about something.
-5. **How to verify and ship it** -- how to test the fix against the case description, and how to \
-   get it reviewed/merged (PR against the branch/repo from step 2).
+6. **How to verify and ship it** -- how to test the fix against the case description, and how to \
+   get it reviewed/merged (PR against the branch/repo from step 3).
 
 Be concrete wherever the material below supports it; be honest about gaps rather than inventing \
 detail that isn't there. Output only the Markdown guide itself, nothing else -- no preamble, no \
 "here's your guide" framing.
+
+--- DIFFICULTY RUBRIC (fixed bands -- use these, not your own judgment of what a number means) ---
+{difficulty_rubric}
 
 --- CASE BRIEF ---
 {brief}
@@ -352,6 +371,7 @@ def build_prompt(case_number, brief_text, suggested_repo_text, ado_detail_text, 
         suggested_repo=suggested_repo_text,
         ado_detail=ado_detail_text,
         example_guide=example_guide_text,
+        difficulty_rubric=DIFFICULTY_RUBRIC,
     )
 
 
@@ -386,6 +406,18 @@ def _looks_like_guide(text, case_number):
     far better than this can."""
     head = text.lstrip()[:200].lower()
     return head.startswith("#") and str(case_number).lower() in head
+
+
+_DIFFICULTY_RE = re.compile(r"(?im)\*\*Implementation Difficulty:\*\*\s*\d{1,2}\s*/\s*10")
+
+
+def _has_difficulty_rating(text):
+    """Same spirit as _looks_like_guide: a loose, warn-only check that
+    claude actually followed the "Implementation difficulty" instruction
+    (see PROMPT_TEMPLATE/DIFFICULTY_RUBRIC) instead of silently dropping it.
+    Never blocks writing the file -- a human can judge the actual content
+    far better than this can."""
+    return bool(_DIFFICULTY_RE.search(text[:1000]))
 
 
 def call_claude(prompt, model=None, extra_args=None, timeout=600, agent_name=None):
@@ -532,6 +564,12 @@ def main():
             f"Warning: claude's output doesn't look like the expected \"# Case {args.case_number}\" guide "
             "(no leading heading / case number in the first 200 characters) -- writing it "
             "anyway, but take a look before trusting it.",
+            file=sys.stderr,
+        )
+    if not _has_difficulty_rating(guide_text):
+        print(
+            "Warning: claude's output doesn't include the expected \"**Implementation Difficulty:** X/10\" "
+            "line -- writing it anyway, but take a look before trusting it.",
             file=sys.stderr,
         )
 
