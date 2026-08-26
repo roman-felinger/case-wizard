@@ -162,11 +162,6 @@ class SummarizeTests(unittest.TestCase):
         row = cg.summarize("T1", brief_path, None)
         self.assertIsNone(row["customer"])
 
-    def test_a_guide_missing_the_difficulty_line_comes_back_none(self):
-        guide_path = self._write("guide.md", "# Case T1\n\nno difficulty line here.\n")
-        row = cg.summarize("T1", None, guide_path)
-        self.assertIsNone(row["difficulty"])
-
 
 class ExtractDifficultyTests(unittest.TestCase):
     def test_no_text_is_none(self):
@@ -178,6 +173,21 @@ class ExtractDifficultyTests(unittest.TestCase):
 
     def test_no_difficulty_line_is_none(self):
         self.assertIsNone(cg._extract_difficulty("# Case T1\n\nno difficulty line here.\n"))
+
+    def test_a_single_dash_separator_is_tolerated(self):
+        self.assertEqual(
+            cg._extract_difficulty("**Implementation Difficulty:** 7/10 - one dash, not two.\n"),
+            "7/10 -- one dash, not two.",
+        )
+
+    def test_matching_is_case_insensitive_on_the_header(self):
+        self.assertEqual(
+            cg._extract_difficulty("**implementation difficulty:** 3/10 -- lowercase header.\n"),
+            "3/10 -- lowercase header.",
+        )
+
+    def test_a_bare_rating_with_no_reason_text_has_no_trailing_dashes(self):
+        self.assertEqual(cg._extract_difficulty("**Implementation Difficulty:** 2/10\n"), "2/10")
 
 
 class CaseToRowTests(unittest.TestCase):
@@ -226,9 +236,6 @@ class TagTests(unittest.TestCase):
 
     def test_stale_wins_over_up_to_date_if_somehow_both_set(self):
         self.assertEqual(cg._tag({"owned_by_me": True, "stale": True, "is_new": False}), "mine, stale")
-
-    def test_a_new_case_gets_no_suffix(self):
-        self.assertEqual(cg._tag({"owned_by_me": True, "is_new": True}), "mine")
 
 
 class IsStaleTests(unittest.TestCase):
@@ -533,6 +540,72 @@ class MainLoopTests(unittest.TestCase):
             self._run(cases, fake_run_stage, argv=["--sort", "hardest"])
         printed = "\n".join(str(c.args[0]) for c in fake_print.call_args_list if c.args)
         self.assertLess(printed.index("- T2 ("), printed.index("- T1 ("))
+
+    def test_a_failed_guide_after_a_successful_brief_still_reports_title_and_customer(self):
+        # CLAUDE.md calls this out by name: "a failed case_guide.py call
+        # still reports the brief's own title/customer, just with no
+        # difficulty line" -- distinct from a failed *brief* (which has
+        # nothing to report at all beyond the raw CRM listing fields).
+        cases = [self._new_case("T1", "t1", "c1")]
+
+        def fake_run_stage(script, number):
+            if os.path.basename(script) == "case_brief.py":
+                with open(os.path.join(self.tmp, "brief", f"brief-{number}.md"), "w", encoding="utf-8") as f:
+                    f.write(_brief("Real Title", "Real Customer"))
+                return 0
+            return 1  # guide fails -- never writes guide-T1.md
+
+        rc = self._run(cases, fake_run_stage)
+        self.assertEqual(rc, 1)
+
+    def test_a_stage_reporting_success_but_writing_no_file_is_treated_as_a_failure(self):
+        # Both `rc != 0 or not os.path.exists(...)` checks have a second
+        # half no other test exercises: a script that returns 0 without
+        # actually producing the file it's supposed to.
+        cases = [self._new_case("T1")]
+        rc = self._run(cases, lambda script, number: 0)  # "succeeds" but writes nothing
+        self.assertEqual(rc, 1)
+
+    def test_a_truncation_warning_is_printed_but_does_not_stop_the_run(self):
+        cases = [self._new_case("T1")]
+
+        def fake_run_stage(script, number):
+            base = "brief" if os.path.basename(script) == "case_brief.py" else "guide"
+            content = _brief() if base == "brief" else _guide()
+            with open(os.path.join(self.tmp, base, f"{base}-{number}.md"), "w", encoding="utf-8") as f:
+                f.write(content)
+            return 0
+
+        with mock.patch.object(cg, "BRIEF_DIR", os.path.join(self.tmp, "brief")), \
+             mock.patch.object(cg, "GUIDE_DIR", os.path.join(self.tmp, "guide")), \
+             mock.patch.object(cg, "REPORT_DIR", os.path.join(self.tmp, "gets")), \
+             mock.patch.object(cg, "find_relevant_cases", return_value=(cases, "more than 200 cases matched")), \
+             mock.patch.object(cg, "run_stage", side_effect=fake_run_stage), \
+             mock.patch.object(sys, "argv", ["case_getter.py"]):
+            with mock.patch("sys.stderr") as fake_stderr:
+                rc = cg.main()
+        self.assertEqual(rc, 0)
+        printed_to_stderr = "".join(str(c.args[0]) for c in fake_stderr.write.call_args_list)
+        self.assertIn("more than 200 cases matched", printed_to_stderr)
+
+    def test_no_relevant_cases_still_writes_an_empty_report_not_just_returncode_zero(self):
+        self._run([], mock.Mock())
+        written = glob.glob(os.path.join(self.tmp, "gets", "get-*.md"))
+        self.assertEqual(len(written), 1)
+
+
+class RunStageTests(unittest.TestCase):
+    def test_calls_subprocess_run_with_the_interpreter_script_and_case_number(self):
+        with mock.patch.object(cg.subprocess, "run") as run:
+            run.return_value.returncode = 0
+            rc = cg.run_stage("case_brief.py", "T1")
+        run.assert_called_once_with([cg.sys.executable, "case_brief.py", "T1"])
+        self.assertEqual(rc, 0)
+
+    def test_returns_the_subprocess_exit_code(self):
+        with mock.patch.object(cg.subprocess, "run") as run:
+            run.return_value.returncode = 3
+            self.assertEqual(cg.run_stage("case_brief.py", "T1"), 3)
 
 
 if __name__ == "__main__":

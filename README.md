@@ -201,7 +201,7 @@ python run_tests.py brief guide  # just these
 - **Solve:** MVP — clone/branch/dependency-install verified, 157 tests
   (`case-solve/tests/`); a real end-to-end Claude implementation run against a live
   repo is the main thing left to exercise
-- **Getter:** working, verified against live CRM data; 56 tests (`case-getter/tests/`)
+- **Getter:** working, verified against live CRM data; 63 tests (`case-getter/tests/`)
 
 See `CLAUDE.md` for architecture notes and the troubleshooting section below if
 something's not working.

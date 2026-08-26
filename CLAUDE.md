@@ -30,7 +30,7 @@ python run_tests.py                              # every stage's test suite (mus
 python -m unittest discover -s tests -v           # from any one stage's own directory, or repo root for case_wizard.py's own tests
 ```
 
-Test counts: case-brief 196, case-guide 110, case-solve 157, case-getter 56,
+Test counts: case-brief 196, case-guide 110, case-solve 157, case-getter 63,
 root (`case_wizard.py`) 30 — all mocked, no network (case-getter's own tests mock
 subprocess/CRM calls; see its own section below for how it was verified live once).
 Deliberately not exhaustive over every CLI flag or every low-risk rendering/plumbing
