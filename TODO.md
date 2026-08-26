@@ -26,3 +26,15 @@
   writes that same summary to `case-getter/gets/get-<timestamp>.md`
   (gitignored, one file per run) so a triage session leaves something on disk to
   refer back to, not just console output.
+  **Extended again (2026-08-26):** a case that already has a brief is now
+  refreshed (re-briefed and re-guided) if the CRM record changed since, instead
+  of being skipped forever once a brief exists (`is_stale`, compares the CRM's
+  own `modifiedon` against a hidden marker stamped into every brief). More
+  importantly, a run no longer filters its output down to only new/stale cases:
+  it now always lists *every* relevant case, sorted by implementation difficulty
+  (easiest first by default, `--sort`) -- a case already up to date is left
+  alone but still shown, reusing its existing title/customer/difficulty off
+  disk. "No relevant cases found" now only ever means the CRM listing itself
+  came back empty, not "nothing changed since last run" -- that used to print
+  the same unhelpful message despite real, unaddressed work still sitting in
+  CRM.

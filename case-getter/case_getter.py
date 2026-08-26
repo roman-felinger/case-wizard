@@ -1,47 +1,52 @@
 #!/usr/bin/env python3
-"""Finds every CRM case nobody has picked up yet and runs case-brief +
-case-guide (the first two stages) for whichever of those don't already have
-a brief, then prints a short triage list of what it just generated.
+"""Finds every CRM case relevant to whoever is signed in -- not just brand
+new ones -- runs case-brief + case-guide (the first two stages) for
+whichever ones actually need it, and prints a triage list of *all* of them,
+sorted by implementation difficulty. A run never comes back with "nothing
+to do" just because nothing changed since last time: there is a real triage
+list to see -- what's relevant right now -- even on a day nothing is new.
 
-"New" = no brief already on disk (case-brief/briefs/brief-<code>.md) --
-re-briefing/re-guiding a case that already has one is what case_wizard.py's
-own per-case `brief`/`guide`/`all` commands are for. "Relevant" = a case
-that's still Active and either (a) still owned by the CRM's default
-unassigned-case team ("Helpdesk e-mail" -- see case-brief's
+"Relevant" = a case that's still Active and either (a) still owned by the
+CRM's default unassigned-case team ("Helpdesk e-mail" -- see case-brief's
 lib/crm_scrape.py::DEFAULT_UNASSIGNED_TEAM_NAME), i.e. nobody has claimed it
 yet, or (b) already owned by whoever is signed in -- i.e. yours already, not
 someone else's. Accessible to whoever is signed in needs no extra filter of
 its own: the Dataverse Web API only ever returns what that user's security
 role can see (see case-brief's CLAUDE.md section).
 
-Each match gets exactly what `python case_wizard.py all <code> --stop-after
-guide` would do for it, one case at a time via the same two scripts as
-subprocesses -- a failure on one case is reported and does not stop the
-rest of the run. This script talks to Dataverse exactly once (the listing
-query) -- case-brief's/case-guide's own scripts do their normal per-case
-lookups (CRM, Azure DevOps) themselves.
+Every relevant case is included in the output, but only some are actually
+(re)processed:
+  - "new" -- no brief on disk yet (case-brief/briefs/brief-<code>.md).
+  - "stale" -- a brief exists, but the CRM record changed since it was
+    generated (see is_stale) -- report.build_markdown stamps a hidden "as
+    of" marker into every brief, which this script compares against a
+    fresh CRM modifiedon on each run. A brief with no marker (predates this
+    feature, or was hand-edited) is left alone rather than guessed at.
+  - everything else already has an up-to-date brief/guide and is left
+    alone -- its existing title/customer/difficulty (already on disk) is
+    read back for the triage list rather than regenerated.
+New/stale cases get exactly what `python case_wizard.py all <code>
+--stop-after guide` would do for it, one case at a time via the same two
+scripts as subprocesses -- a failure on one case is reported and does not
+stop the rest of the run. This script talks to Dataverse exactly once (the
+listing query) -- case-brief's/case-guide's own scripts do their normal
+per-case lookups (CRM, Azure DevOps) themselves.
 
 Every run also writes a Markdown report of what it found (title/customer/
 difficulty/ownership, same as the console summary) to case-getter/gets/,
 one file per run -- see write_report/build_report_markdown.
 
-Not just a one-shot discovery net for brand-new cases: a case that already
-has a brief is re-briefed and re-guided too if the CRM record changed since
-that brief was generated (see is_stale) -- report.build_markdown stamps a
-hidden "as of" marker into every brief, which this script compares against
-a fresh CRM modifiedon on each run. A brief with no marker (predates this
-feature, or was hand-edited) is left alone rather than guessed at.
-
---sort orders the triage summary by implementation difficulty once it's
-known (easiest/hardest first) instead of just processing order -- see
-sort_rows. Only affects a full run's summary; a --dry-run listing has no
-difficulty yet to sort by.
+--sort orders the triage list by implementation difficulty (easiest first
+by default) instead of just processing order -- see sort_rows. Applies to
+both a full run's summary and a --dry-run listing: a case that already has
+a guide from a previous run has a real difficulty to sort by even before
+this run touches it; a genuinely new case sorts last until it's processed.
 
 Examples:
-    python case_getter.py                 # brief + guide every new or stale, relevant case
-    python case_getter.py --dry-run        # just list what would be picked up, no writes
-    python case_getter.py --limit 3        # cap how many cases to process this run
-    python case_getter.py --sort easiest   # triage summary ordered cheapest-first
+    python case_getter.py                 # brief + guide every new/stale case, list everything relevant
+    python case_getter.py --dry-run        # just list what's relevant, no writes
+    python case_getter.py --limit 3        # cap how many new/stale cases to process this run
+    python case_getter.py --sort hardest   # triage list ordered hardest-first instead of easiest-first
 """
 import argparse
 import datetime
@@ -142,16 +147,15 @@ def is_stale(case, brief_path):
     return crm_modified > brief_modified
 
 
-def find_new_relevant_cases(brief_dir=BRIEF_DIR):
-    """(cases, warning) -- CRM cases worth briefing this run: ones with no
-    brief on disk yet, plus ones that already have a brief but whose CRM
-    data has changed since it was generated (see is_stale) -- case-getter
-    isn't just a one-shot net for brand-new cases, it also catches an
-    existing case changing under a brief that's now out of date. Each
-    returned case carries case["stale"] (True/False) so callers (main's
-    processing loop, the triage summary) can tell the two apart -- a
-    reprocessed case still needs both stages re-run, but it's a genuinely
-    different situation from a case nobody has looked at yet.
+def find_relevant_cases(brief_dir=BRIEF_DIR):
+    """(cases, warning) -- every CRM case relevant to whoever is signed in,
+    right now -- not filtered down to only ones needing (re)processing.
+    Each case is tagged case["is_new"] (no brief on disk at all yet) and
+    case["stale"] (a brief exists, but the CRM record changed since it was
+    generated -- see is_stale), so callers (main's processing loop, the
+    triage summary) know which ones actually need case-brief/case-guide
+    (re)run versus which already have an up-to-date brief/guide and are
+    only along for the triage list.
 
     Exits with a clear error if the CRM listing query itself fails (team
     not found, permissions, ...) -- there's no partial result to fall back
@@ -176,13 +180,14 @@ def find_new_relevant_cases(brief_dir=BRIEF_DIR):
             continue
         key = safe_name(ticket)
         if key not in have:
+            c["is_new"] = True
             c["stale"] = False
             result.append(c)
             continue
+        c["is_new"] = False
         brief_path = os.path.join(brief_dir, f"brief-{key}.md")
-        if is_stale(c, brief_path):
-            c["stale"] = True
-            result.append(c)
+        c["stale"] = is_stale(c, brief_path)
+        result.append(c)
     return result, warning
 
 
@@ -207,12 +212,30 @@ _CUSTOMER_RE = re.compile(r"^-\s+\*\*Customer:\*\*\s*(.+?)\s*$", re.MULTILINE)
 _DIFFICULTY_RE = re.compile(r"(?im)\*\*Implementation Difficulty:\*\*\s*(\d{1,2}\s*/\s*10)\s*(?:-{1,2}\s*)?(.*)$")
 
 
+def _extract_difficulty(guide_text):
+    """The "X/10 -- reason" implementation-difficulty string out of a
+    guide's own text, or None if there's no guide text or no recognizable
+    difficulty line. Shared by summarize (a guide this run just wrote) and
+    _case_to_row (a guide already on disk from a previous run) -- both read
+    the exact same rendering shape back the exact same way."""
+    if not guide_text:
+        return None
+    m = _DIFFICULTY_RE.search(guide_text)
+    if not m:
+        return None
+    reason = m.group(2).strip()
+    return f"{m.group(1).replace(' ', '')}" + (f" -- {reason}" if reason else "")
+
+
 def summarize(case_number, brief_path, guide_path):
     """Title/customer (from the brief) and implementation difficulty (from
-    the guide) for one just-processed case -- exactly what print_summary
-    lists. Missing/unparseable pieces come back None rather than raising --
-    a summary that's missing one field is still useful; failing the whole
-    run over it would not be."""
+    the guide) for one case -- exactly what print_summary lists. Works
+    equally for a brief/guide this run just (re)generated and for one
+    already on disk from a previous run (an up-to-date case main() left
+    alone) -- either way it's just reading files. Missing/unparseable
+    pieces come back None rather than raising -- a summary that's missing
+    one field is still useful; failing the whole run over it would not
+    be."""
     row = {"case_number": case_number, "title": None, "customer": None, "difficulty": None}
 
     brief_text = _read(brief_path)
@@ -223,13 +246,7 @@ def summarize(case_number, brief_path, guide_path):
         if m and m.group(1) != "—":  # report.py's own placeholder for a missing value
             row["customer"] = m.group(1)
 
-    guide_text = _read(guide_path)
-    if guide_text:
-        m = _DIFFICULTY_RE.search(guide_text)
-        if m:
-            reason = m.group(2).strip()
-            row["difficulty"] = f"{m.group(1).replace(' ', '')}" + (f" -- {reason}" if reason else "")
-
+    row["difficulty"] = _extract_difficulty(_read(guide_path))
     return row
 
 
@@ -238,14 +255,20 @@ def _ownership_tag(case):
 
 
 def _tag(case):
-    """Ownership plus, when relevant, why this case was picked up again --
-    "mine"/"unassigned", with ", stale" appended for a case that already
-    had a brief but got reprocessed because the CRM data changed since (see
-    is_stale). Kept as a small wrapper around _ownership_tag rather than
-    folding "stale" into it directly, so a non-stale case renders exactly
-    as before this feature ("mine"/"unassigned", nothing extra)."""
+    """Ownership plus, when relevant, why this case is/isn't being
+    (re)processed this run -- "mine"/"unassigned", with ", stale" appended
+    for a case that already had a brief but got reprocessed because the CRM
+    data changed since (see is_stale), or ", up to date" for a case that
+    already has a current brief/guide and was left alone, only included for
+    triage. A case with neither flag set (the common shape before this
+    distinction existed, and still the default when "is_new" isn't known)
+    renders exactly as before -- "mine"/"unassigned", nothing extra."""
     tag = _ownership_tag(case)
-    return f"{tag}, stale" if case.get("stale") else tag
+    if case.get("stale"):
+        return f"{tag}, stale"
+    if case.get("is_new") is False:
+        return f"{tag}, up to date"
+    return tag
 
 
 _DIFFICULTY_NUM_RE = re.compile(r"^(\d{1,2})\s*/\s*10")
@@ -263,14 +286,14 @@ def _difficulty_num(row):
 
 
 def sort_rows(rows, sort):
-    """Reorders a finished run's rows for triage -- "easiest"/"hardest"
-    first by implementation difficulty, or left in processing order
-    ("none", the default -- see build_parser's --sort). Only meaningful
-    once difficulty is known, so a dry-run listing (no guides generated
-    yet, so every row's difficulty is unset) always comes back unchanged
-    regardless of `sort`.
+    """Reorders the triage list by implementation difficulty -- "easiest"
+    first by default (build_parser's --sort), "hardest" first, or left in
+    processing order ("none", an explicit opt-out). Applies to both a full
+    run and a --dry-run listing: a case already guided in a previous run
+    has a real difficulty to sort by even before this run touches it.
 
-    Rows with no parseable difficulty always sort last, in *either*
+    Rows with no parseable difficulty (a brand-new case not processed yet,
+    or a guide that failed to generate) always sort last, in *either*
     direction -- "unknown" isn't the same as "easiest" or "hardest", so it
     shouldn't jump to the front just because --sort hardest reverses the
     numeric comparison.
@@ -285,9 +308,11 @@ def sort_rows(rows, sort):
 
 def print_summary(rows):
     if not rows:
-        print("\nNo new, relevant cases found.")
+        print("\nNo relevant cases found.")
         return
-    print(f"\n{len(rows)} new case(s) briefed and guided:\n")
+    processed = sum(1 for r in rows if r.get("attempted"))
+    print(f"\n{len(rows)} relevant case(s) ({processed} briefed/guided this run, "
+          f"{len(rows) - processed} left as-is):\n")
     for r in rows:
         print(f"- {r['case_number']} ({_tag(r)}): {r['title'] or '(no title)'} -- {r['customer'] or 'unknown customer'}")
         print(f"    Difficulty: {r['difficulty'] or '(not found -- check the guide)'}")
@@ -295,18 +320,25 @@ def print_summary(rows):
             print(f"    ⚠ {r['error']}")
 
 
-def _case_to_row(c):
-    """Normalizes one entry from find_new_relevant_cases (a raw CRM listing
+def _case_to_row(c, guide_dir=GUIDE_DIR):
+    """Normalizes one entry from find_relevant_cases (a raw CRM listing
     dict, keyed `ticket_number`) to the same {case_number, owned_by_me,
-    stale, title, customer} shape a fully-processed row already has -- used
-    for the dry-run report, which never builds a real `row` the way main's
-    own brief/guide loop does."""
+    stale, is_new, title, customer, difficulty} shape a fully-processed row
+    already has -- used for the dry-run listing/report, which never
+    (re)generates a brief/guide the way main's own processing loop does.
+    difficulty is read from a guide already on disk from a previous run
+    when there is one (free -- no claude call, no processing), so a
+    dry-run listing still sorts meaningfully by difficulty; a case that's
+    never been guided comes back with difficulty None, same as one whose
+    guide failed to generate."""
     return {
         "case_number": c["ticket_number"],
         "owned_by_me": c.get("owned_by_me"),
         "stale": c.get("stale", False),
+        "is_new": c.get("is_new", True),
         "title": c.get("title"),
         "customer": c.get("customer"),
+        "difficulty": _extract_difficulty(_read(os.path.join(guide_dir, f"guide-{safe_name(c['ticket_number'])}.md"))),
     }
 
 
@@ -315,26 +347,33 @@ def build_report_markdown(rows, dry_run, timestamp):
     puts on the console into a Markdown file, so a triage run leaves
     something on disk to refer back to later -- case-brief/case-guide
     already do this for their own per-case output; this is case-getter's
-    own equivalent, one file per run rather than one per case."""
+    own equivalent, one file per run rather than one per case.
+
+    Every relevant case gets a section, whether or not this run actually
+    (re)processed it -- see _tag for how a row says which situation it's
+    in ("stale"/"up to date"/neither). Difficulty is rendered the same way
+    in both a real run and a --dry-run listing: a case already guided from
+    a previous run has one to show even in a dry run (see _case_to_row);
+    only a case never guided at all comes back with the "not yet
+    available" placeholder."""
     kind = "dry run" if dry_run else "run"
     lines = [f"# Case-getter {kind} -- {timestamp}", ""]
 
     if not rows:
-        lines.append("No new, relevant cases found.")
+        lines.append("No relevant cases found.")
         return "\n".join(lines) + "\n"
 
-    lines.append(f"Found {len(rows)} new, relevant case(s).")
+    lines.append(f"Found {len(rows)} relevant case(s).")
     lines.append("")
     for r in rows:
         lines.append(f"## {r['case_number']} ({_tag(r)})")
         lines.append(f"- **Title:** {r.get('title') or '(no title)'}")
         lines.append(f"- **Customer:** {r.get('customer') or 'unknown customer'}")
+        lines.append(f"- **Difficulty:** {r.get('difficulty') or '(not yet available -- not briefed/guided yet)'}")
         if dry_run:
-            lines.append("- _(dry run -- brief/guide not generated)_")
-        else:
-            lines.append(f"- **Difficulty:** {r.get('difficulty') or '(not found -- check the guide)'}")
-            if r.get("error"):
-                lines.append(f"- **⚠ Error:** {r['error']}")
+            lines.append("- _(dry run -- brief/guide not (re)generated this run)_")
+        if r.get("error"):
+            lines.append(f"- **⚠ Error:** {r['error']}")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
@@ -359,12 +398,12 @@ def build_parser():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--limit", type=int, metavar="N", help="Process at most N new cases this run (default: all of them)")
-    parser.add_argument("--dry-run", action="store_true", help="Only list the new, relevant cases -- don't run brief/guide")
+    parser.add_argument("--limit", type=int, metavar="N", help="(Re)process at most N new/stale cases this run (default: all of them)")
+    parser.add_argument("--dry-run", action="store_true", help="Only list the relevant cases -- don't run brief/guide")
     parser.add_argument(
-        "--sort", choices=["none", "easiest", "hardest"], default="none",
-        help="Order the triage summary by implementation difficulty (default: processing order). "
-             "Only affects the full-run summary -- a --dry-run listing has no difficulty yet.",
+        "--sort", choices=["none", "easiest", "hardest"], default="easiest",
+        help="Order the triage list by implementation difficulty (default: easiest first). "
+             "Applies to both a full run and a --dry-run listing -- pass 'none' for plain processing order.",
     )
     return parser
 
@@ -373,12 +412,10 @@ def main():
     args = build_parser().parse_args()
     now = datetime.datetime.now()
 
-    print("Looking up unassigned CRM cases (Dataverse Web API, OAuth)...")
-    new_cases, warning = find_new_relevant_cases()
+    print("Looking up relevant CRM cases (Dataverse Web API, OAuth)...")
+    cases, warning = find_relevant_cases()
     if warning:
         print(f"Warning: {warning}", file=sys.stderr)
-    if args.limit is not None:
-        new_cases = new_cases[: args.limit]
 
     def _write_report(rows):
         path = write_report(
@@ -387,26 +424,63 @@ def main():
         )
         print(f"\nReport written to {path}")
 
-    if not new_cases:
-        print("No new, relevant cases found -- nothing to do.")
+    if not cases:
+        # A genuinely empty listing -- nothing unassigned or yours, active,
+        # at all -- not just "nothing new/stale to (re)process this run"
+        # (that case still has a full triage list to print, see below).
+        print("No relevant cases found -- nothing to do.")
         _write_report([])
         return 0
 
-    print(f"Found {len(new_cases)} new, relevant case(s): {', '.join(c['ticket_number'] for c in new_cases)}")
+    print(f"Found {len(cases)} relevant case(s): {', '.join(c['ticket_number'] for c in cases)}")
+
     if args.dry_run:
-        for c in new_cases:
-            print(f"- {c['ticket_number']} ({_tag(c)}): {c.get('title') or '(no title)'} -- {c.get('customer') or 'unknown customer'}")
-        _write_report([_case_to_row(c) for c in new_cases])
+        rows = sort_rows([_case_to_row(c) for c in cases], args.sort)
+        for r in rows:
+            print(f"- {r['case_number']} ({_tag(r)}): {r['title'] or '(no title)'} -- {r['customer'] or 'unknown customer'}"
+                  f" -- {r['difficulty'] or 'difficulty not yet available'}")
+        _write_report(rows)
         return 0
 
-    rows = []
-    for c in new_cases:
-        number = c["ticket_number"]
-        print(f"\n=== {number} ===")
-        row = {"case_number": number, "owned_by_me": c.get("owned_by_me"), "stale": c.get("stale", False)}
+    # --limit caps how many new/stale cases actually get (re)processed this
+    # run -- a case already up to date is free to include (just a file
+    # read), so it's never counted against the limit.
+    to_process = [c for c in cases if c.get("is_new") or c.get("stale")]
+    if args.limit is not None:
+        skip = {c["ticket_number"] for c in to_process[args.limit:]}
+        to_process = to_process[: args.limit]
+    else:
+        skip = set()
 
-        rc = run_stage(BRIEF_SCRIPT, number)
+    rows = []
+    for c in cases:
+        number = c["ticket_number"]
+        row = {
+            "case_number": number, "owned_by_me": c.get("owned_by_me"),
+            "stale": c.get("stale", False), "is_new": c.get("is_new", True),
+            "attempted": False,
+        }
         brief_path = os.path.join(BRIEF_DIR, f"brief-{safe_name(number)}.md")
+        guide_path = os.path.join(GUIDE_DIR, f"guide-{safe_name(number)}.md")
+
+        if number in skip:
+            # Would need (re)processing, but --limit was reached first --
+            # still shown in the triage list with whatever's on disk
+            # (possibly nothing yet, for a brand-new case).
+            row.update(summarize(number, brief_path, guide_path))
+            rows.append(row)
+            continue
+
+        if not (c.get("is_new") or c.get("stale")):
+            # Already up to date -- no need to re-run brief/guide, just
+            # read the existing files back for the triage list.
+            row.update(summarize(number, brief_path, guide_path))
+            rows.append(row)
+            continue
+
+        row["attempted"] = True
+        print(f"\n=== {number} ===")
+        rc = run_stage(BRIEF_SCRIPT, number)
         if rc != 0 or not os.path.exists(brief_path):
             row.update({"title": c.get("title"), "customer": c.get("customer"), "difficulty": None})
             row["error"] = f"case-brief failed (exit {rc}) -- skipped case-guide"
@@ -414,7 +488,6 @@ def main():
             continue
 
         rc = run_stage(GUIDE_SCRIPT, number)
-        guide_path = os.path.join(GUIDE_DIR, f"guide-{safe_name(number)}.md")
         if rc != 0 or not os.path.exists(guide_path):
             row["error"] = f"case-guide failed (exit {rc})"
 

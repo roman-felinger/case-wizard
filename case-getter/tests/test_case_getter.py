@@ -1,13 +1,15 @@
-"""Unit tests for case_getter.py's own logic: which CRM cases count as
-"new" (existing_brief_numbers/find_new_relevant_cases), pulling
-title/customer/difficulty back out of a finished brief/guide
-(summarize), and main()'s per-case loop (mocked subprocess calls -- no
-real brief/guide/CRM/claude call).
+"""Unit tests for case_getter.py's own logic: which CRM cases are relevant
+and how each is tagged (existing_brief_numbers/find_relevant_cases),
+pulling title/customer/difficulty back out of a finished brief/guide
+(summarize/_case_to_row), and main()'s per-case loop (mocked subprocess
+calls -- no real brief/guide/CRM/claude call).
 
 Deliberately not exhaustive over build_parser/CLI plumbing -- low-risk,
 same convention as case-brief's own tests. What's actually worth testing
-here: the "new" filter (a case with a brief already on disk must never be
-re-processed), and a failure on one case must not stop the rest.
+here: that find_relevant_cases returns *every* relevant case (not just new
+ones) with the right is_new/stale tags, that a case already up to date is
+included in the triage output without being reprocessed, and that a
+failure on one case doesn't stop the rest.
 
 Run with: python -m unittest discover -s tests -v   (from case-getter/)
       or: python -m pytest tests                     (if pytest is installed)
@@ -56,33 +58,39 @@ class ExistingBriefNumbersTests(unittest.TestCase):
         self.assertEqual(cg.existing_brief_numbers(self.tmp), set())
 
 
-class FindNewRelevantCasesTests(unittest.TestCase):
+class FindRelevantCasesTests(unittest.TestCase):
+    """find_relevant_cases returns *every* relevant CRM case, not just ones
+    needing (re)processing -- each tagged is_new/stale so callers can tell
+    the three situations (new, stale, already up to date) apart."""
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
-    def _write_brief(self, ticket_number):
+    def _write_brief(self, ticket_number, modified_on=None):
+        marker = f"<!-- case-brief:crm-modified-on={modified_on} -->\n\n" if modified_on else ""
         with open(os.path.join(self.tmp, f"brief-{ticket_number}.md"), "w", encoding="utf-8") as f:
-            f.write("x")
+            f.write(f"x\n{marker}")
 
-    def test_excludes_cases_that_already_have_a_brief(self):
-        self._write_brief("T1")
-        cases = [{"ticket_number": "T1"}, {"ticket_number": "T2"}]
+    def test_a_case_with_no_brief_yet_is_tagged_new_not_stale(self):
+        cases = [{"ticket_number": "T2"}]
         with mock.patch.object(cg.case_brief, "list_relevant_cases", return_value=(cases, None, False)):
-            new_cases, warning = cg.find_new_relevant_cases(self.tmp)
-        self.assertEqual([c["ticket_number"] for c in new_cases], ["T2"])
+            found, warning = cg.find_relevant_cases(self.tmp)
+        self.assertEqual([c["ticket_number"] for c in found], ["T2"])
+        self.assertTrue(found[0]["is_new"])
+        self.assertFalse(found[0]["stale"])
         self.assertIsNone(warning)
 
     def test_a_listing_error_exits_rather_than_returning_a_partial_result(self):
         with mock.patch.object(cg.case_brief, "list_relevant_cases", return_value=([], "HTTP 403", False)):
             with self.assertRaises(SystemExit):
-                cg.find_new_relevant_cases(self.tmp)
+                cg.find_relevant_cases(self.tmp)
 
     def test_truncation_is_surfaced_as_a_warning_not_silently_dropped(self):
         cases = [{"ticket_number": "T2"}]
         with mock.patch.object(cg.case_brief, "list_relevant_cases", return_value=(cases, None, True)):
-            new_cases, warning = cg.find_new_relevant_cases(self.tmp)
-        self.assertEqual([c["ticket_number"] for c in new_cases], ["T2"])
+            found, warning = cg.find_relevant_cases(self.tmp)
+        self.assertEqual([c["ticket_number"] for c in found], ["T2"])
         self.assertIsNotNone(warning)
 
     def test_a_ticket_number_needing_filename_sanitizing_still_matches_its_brief(self):
@@ -90,36 +98,39 @@ class FindNewRelevantCasesTests(unittest.TestCase):
         # is named after the sanitized form, so the CRM's raw ticket number
         # has to be sanitized the same way before comparing, or a case that
         # already has a brief would look "new" again.
-        self._write_brief("T1_2")
-        cases = [{"ticket_number": "T1/2"}]
+        self._write_brief("T1_2", modified_on="2026-08-20T10:00:00Z")
+        cases = [{"ticket_number": "T1/2", "modified_on": "2026-08-20T10:00:00Z"}]
         with mock.patch.object(cg.case_brief, "list_relevant_cases", return_value=(cases, None, False)):
-            new_cases, _ = cg.find_new_relevant_cases(self.tmp)
-        self.assertEqual(new_cases, [])
+            found, _ = cg.find_relevant_cases(self.tmp)
+        self.assertFalse(found[0]["is_new"])
+        self.assertFalse(found[0]["stale"])
 
-    def test_a_brand_new_case_is_tagged_not_stale(self):
-        cases = [{"ticket_number": "T2"}]
-        with mock.patch.object(cg.case_brief, "list_relevant_cases", return_value=(cases, None, False)):
-            new_cases, _ = cg.find_new_relevant_cases(self.tmp)
-        self.assertEqual(new_cases[0]["stale"], False)
-
-    def test_a_case_with_a_brief_whose_crm_data_changed_since_is_included_as_stale(self):
-        path = os.path.join(self.tmp, "brief-T1.md")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("# Case T1\n\n<!-- case-brief:crm-modified-on=2026-08-20T10:00:00Z -->\n\nold content\n")
+    def test_a_case_with_a_brief_whose_crm_data_changed_since_is_tagged_stale(self):
+        self._write_brief("T1", modified_on="2026-08-20T10:00:00Z")
         cases = [{"ticket_number": "T1", "modified_on": "2026-08-21T09:00:00Z"}]
         with mock.patch.object(cg.case_brief, "list_relevant_cases", return_value=(cases, None, False)):
-            new_cases, _ = cg.find_new_relevant_cases(self.tmp)
-        self.assertEqual([c["ticket_number"] for c in new_cases], ["T1"])
-        self.assertTrue(new_cases[0]["stale"])
+            found, _ = cg.find_relevant_cases(self.tmp)
+        self.assertEqual([c["ticket_number"] for c in found], ["T1"])
+        self.assertFalse(found[0]["is_new"])
+        self.assertTrue(found[0]["stale"])
 
-    def test_a_case_with_an_up_to_date_brief_is_excluded(self):
-        path = os.path.join(self.tmp, "brief-T1.md")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("# Case T1\n\n<!-- case-brief:crm-modified-on=2026-08-21T09:00:00Z -->\n\ncontent\n")
+    def test_a_case_with_an_up_to_date_brief_is_still_included_but_not_flagged(self):
+        # The whole point of always returning every relevant case: an
+        # up-to-date one isn't dropped from the list, it's just marked as
+        # not needing (re)processing.
+        self._write_brief("T1", modified_on="2026-08-21T09:00:00Z")
         cases = [{"ticket_number": "T1", "modified_on": "2026-08-21T09:00:00Z"}]
         with mock.patch.object(cg.case_brief, "list_relevant_cases", return_value=(cases, None, False)):
-            new_cases, _ = cg.find_new_relevant_cases(self.tmp)
-        self.assertEqual(new_cases, [])
+            found, _ = cg.find_relevant_cases(self.tmp)
+        self.assertEqual([c["ticket_number"] for c in found], ["T1"])
+        self.assertFalse(found[0]["is_new"])
+        self.assertFalse(found[0]["stale"])
+
+    def test_a_case_with_no_ticket_number_is_skipped(self):
+        cases = [{"ticket_number": None}, {"ticket_number": "T2"}]
+        with mock.patch.object(cg.case_brief, "list_relevant_cases", return_value=(cases, None, False)):
+            found, _ = cg.find_relevant_cases(self.tmp)
+        self.assertEqual([c["ticket_number"] for c in found], ["T2"])
 
 
 class SummarizeTests(unittest.TestCase):
@@ -157,16 +168,47 @@ class SummarizeTests(unittest.TestCase):
         self.assertIsNone(row["difficulty"])
 
 
+class ExtractDifficultyTests(unittest.TestCase):
+    def test_no_text_is_none(self):
+        self.assertIsNone(cg._extract_difficulty(None))
+        self.assertIsNone(cg._extract_difficulty(""))
+
+    def test_pulls_the_rating_and_reason(self):
+        self.assertEqual(cg._extract_difficulty(_guide()), "4/10 -- a few files, no new concepts.")
+
+    def test_no_difficulty_line_is_none(self):
+        self.assertIsNone(cg._extract_difficulty("# Case T1\n\nno difficulty line here.\n"))
+
+
 class CaseToRowTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
     def test_normalizes_a_raw_listing_entry_to_the_row_shape(self):
-        c = {"ticket_number": "T1", "owned_by_me": True, "stale": True, "title": "A title", "customer": "Contoso"}
-        self.assertEqual(cg._case_to_row(c), {
-            "case_number": "T1", "owned_by_me": True, "stale": True, "title": "A title", "customer": "Contoso",
+        c = {"ticket_number": "T1", "owned_by_me": True, "stale": True, "is_new": False,
+             "title": "A title", "customer": "Contoso"}
+        self.assertEqual(cg._case_to_row(c, guide_dir=self.tmp), {
+            "case_number": "T1", "owned_by_me": True, "stale": True, "is_new": False,
+            "title": "A title", "customer": "Contoso", "difficulty": None,
         })
 
-    def test_missing_optional_fields_come_back_none_or_false_not_a_crash(self):
-        row = cg._case_to_row({"ticket_number": "T1"})
-        self.assertEqual(row, {"case_number": "T1", "owned_by_me": None, "stale": False, "title": None, "customer": None})
+    def test_missing_optional_fields_come_back_none_or_a_default_not_a_crash(self):
+        row = cg._case_to_row({"ticket_number": "T1"}, guide_dir=self.tmp)
+        self.assertEqual(row, {
+            "case_number": "T1", "owned_by_me": None, "stale": False, "is_new": True,
+            "title": None, "customer": None, "difficulty": None,
+        })
+
+    def test_reads_difficulty_from_an_existing_guide_on_disk(self):
+        # A case already guided in a previous run has a real difficulty to
+        # show even though this pass never (re)processes it -- e.g. for a
+        # --dry-run listing.
+        with open(os.path.join(self.tmp, "guide-T1.md"), "w", encoding="utf-8") as f:
+            f.write(_guide())
+        c = {"ticket_number": "T1", "is_new": False, "stale": False}
+        row = cg._case_to_row(c, guide_dir=self.tmp)
+        self.assertEqual(row["difficulty"], "4/10 -- a few files, no new concepts.")
 
 
 class TagTests(unittest.TestCase):
@@ -177,6 +219,16 @@ class TagTests(unittest.TestCase):
     def test_stale_case_appends_stale(self):
         self.assertEqual(cg._tag({"owned_by_me": True, "stale": True}), "mine, stale")
         self.assertEqual(cg._tag({"owned_by_me": False, "stale": True}), "unassigned, stale")
+
+    def test_up_to_date_case_appends_up_to_date(self):
+        self.assertEqual(cg._tag({"owned_by_me": True, "is_new": False}), "mine, up to date")
+        self.assertEqual(cg._tag({"owned_by_me": False, "is_new": False}), "unassigned, up to date")
+
+    def test_stale_wins_over_up_to_date_if_somehow_both_set(self):
+        self.assertEqual(cg._tag({"owned_by_me": True, "stale": True, "is_new": False}), "mine, stale")
+
+    def test_a_new_case_gets_no_suffix(self):
+        self.assertEqual(cg._tag({"owned_by_me": True, "is_new": True}), "mine")
 
 
 class IsStaleTests(unittest.TestCase):
@@ -251,7 +303,7 @@ class SortRowsTests(unittest.TestCase):
 class BuildReportMarkdownTests(unittest.TestCase):
     def test_no_rows_states_nothing_found(self):
         md = cg.build_report_markdown([], dry_run=False, timestamp="2026-08-26 12:00:00")
-        self.assertIn("No new, relevant cases found.", md)
+        self.assertIn("No relevant cases found.", md)
 
     def test_a_full_run_row_includes_difficulty_and_ownership(self):
         rows = [{"case_number": "T1", "owned_by_me": True, "title": "A title",
@@ -266,11 +318,20 @@ class BuildReportMarkdownTests(unittest.TestCase):
         md = cg.build_report_markdown(rows, dry_run=False, timestamp="2026-08-26 12:00:00")
         self.assertIn("case-brief failed (exit 1)", md)
 
-    def test_dry_run_never_mentions_difficulty(self):
-        rows = [{"case_number": "T1", "owned_by_me": False, "title": "A title", "customer": "Contoso"}]
+    def test_dry_run_still_shows_difficulty_when_a_guide_already_exists(self):
+        # Unlike before, a --dry-run listing isn't difficulty-blind -- a
+        # case already guided in a previous run has a real one to show.
+        rows = [{"case_number": "T1", "owned_by_me": False, "title": "A title",
+                  "customer": "Contoso", "difficulty": "4/10 -- easy", "is_new": False}]
         md = cg.build_report_markdown(rows, dry_run=True, timestamp="2026-08-26 12:00:00")
-        self.assertNotIn("Difficulty", md)
+        self.assertIn("**Difficulty:** 4/10 -- easy", md)
         self.assertIn("dry run", md.lower())
+
+    def test_dry_run_row_with_no_difficulty_yet_shows_the_placeholder(self):
+        rows = [{"case_number": "T1", "owned_by_me": False, "title": "A title",
+                  "customer": "Contoso", "difficulty": None, "is_new": True}]
+        md = cg.build_report_markdown(rows, dry_run=True, timestamp="2026-08-26 12:00:00")
+        self.assertIn("not yet available", md)
 
 
 class WriteReportTests(unittest.TestCase):
@@ -300,8 +361,8 @@ class OwnershipTagTests(unittest.TestCase):
 
 
 class MainLoopTests(unittest.TestCase):
-    """main()'s per-case loop, with run_stage/find_new_relevant_cases/
-    summarize mocked out -- no real subprocess, CRM, or claude call."""
+    """main()'s per-case loop, with run_stage/find_relevant_cases/summarize
+    mocked out -- no real subprocess, CRM, or claude call."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -316,14 +377,16 @@ class MainLoopTests(unittest.TestCase):
         with mock.patch.object(cg, "BRIEF_DIR", os.path.join(self.tmp, "brief")), \
              mock.patch.object(cg, "GUIDE_DIR", os.path.join(self.tmp, "guide")), \
              mock.patch.object(cg, "REPORT_DIR", os.path.join(self.tmp, "gets")), \
-             mock.patch.object(cg, "find_new_relevant_cases", return_value=(cases, None)), \
+             mock.patch.object(cg, "find_relevant_cases", return_value=(cases, None)), \
              mock.patch.object(cg, "run_stage", side_effect=run_stage_side_effect), \
              mock.patch.object(sys, "argv", ["case_getter.py", *(argv or [])]):
             return cg.main()
 
+    def _new_case(self, number, title="t", customer="c"):
+        return {"ticket_number": number, "title": title, "customer": customer, "is_new": True, "stale": False}
+
     def test_a_failed_brief_is_reported_and_does_not_stop_the_next_case(self):
-        cases = [{"ticket_number": "T1", "title": "t1", "customer": "c1"},
-                 {"ticket_number": "T2", "title": "t2", "customer": "c2"}]
+        cases = [self._new_case("T1", "t1", "c1"), self._new_case("T2", "t2", "c2")]
         calls = []
 
         def fake_run_stage(script, number):
@@ -346,8 +409,8 @@ class MainLoopTests(unittest.TestCase):
         self.assertIn(("case_brief.py", "T2"), calls)
         self.assertIn(("case_guide.py", "T2"), calls)
 
-    def test_limit_caps_how_many_cases_are_processed(self):
-        cases = [{"ticket_number": f"T{n}", "title": "t", "customer": "c"} for n in range(5)]
+    def test_limit_caps_how_many_new_stale_cases_are_processed(self):
+        cases = [self._new_case(f"T{n}") for n in range(5)]
         calls = []
 
         def fake_run_stage(script, number):
@@ -357,31 +420,86 @@ class MainLoopTests(unittest.TestCase):
         self._run(cases, fake_run_stage, argv=["--limit", "2"])
         self.assertEqual(len(set(calls)), 2)
 
+    def test_limit_does_not_drop_up_to_date_cases_from_the_triage_list(self):
+        # An already-current case costs nothing to include (just a file
+        # read), so --limit shouldn't hide it from the output even while
+        # it caps how many new/stale cases get reprocessed.
+        current = {"ticket_number": "T0", "title": "t0", "customer": "c0", "is_new": False, "stale": False}
+        new_cases = [self._new_case(f"T{n}") for n in range(1, 4)]
+        calls = []
+
+        def fake_run_stage(script, number):
+            calls.append(number)
+            return 1
+
+        with mock.patch("builtins.print") as fake_print:
+            self._run([current] + new_cases, fake_run_stage, argv=["--limit", "1"])
+        self.assertEqual(len(set(calls)), 1)  # only one new case actually reprocessed
+        printed = "\n".join(str(c.args[0]) for c in fake_print.call_args_list if c.args)
+        self.assertIn("T0", printed)  # the up-to-date case still shows up
+
+    def test_an_up_to_date_case_is_included_without_calling_run_stage(self):
+        current = {"ticket_number": "T1", "title": "t1", "customer": "c1", "is_new": False, "stale": False}
+        run_stage = mock.Mock()
+        with mock.patch("builtins.print") as fake_print:
+            rc = self._run([current], run_stage)
+        run_stage.assert_not_called()
+        self.assertEqual(rc, 0)
+        printed = "\n".join(str(c.args[0]) for c in fake_print.call_args_list if c.args)
+        self.assertIn("T1", printed)
+        self.assertIn("up to date", printed)
+
+    def test_a_stale_case_is_reprocessed(self):
+        stale = {"ticket_number": "T1", "title": "t1", "customer": "c1", "is_new": False, "stale": True}
+        calls = []
+
+        def fake_run_stage(script, number):
+            calls.append((os.path.basename(script), number))
+            base = "brief" if os.path.basename(script) == "case_brief.py" else "guide"
+            content = _brief() if base == "brief" else _guide()
+            with open(os.path.join(self.tmp, base, f"{base}-{number}.md"), "w", encoding="utf-8") as f:
+                f.write(content)
+            return 0
+
+        rc = self._run([stale], fake_run_stage)
+        self.assertEqual(rc, 0)
+        self.assertIn(("case_brief.py", "T1"), calls)
+        self.assertIn(("case_guide.py", "T1"), calls)
+
     def test_dry_run_never_calls_run_stage(self):
-        cases = [{"ticket_number": "T1", "title": "t", "customer": "c"}]
+        cases = [self._new_case("T1")]
         run_stage = mock.Mock()
         rc = self._run(cases, run_stage, argv=["--dry-run"])
         run_stage.assert_not_called()
         self.assertEqual(rc, 0)
 
-    def test_no_new_cases_is_a_clean_no_op(self):
+    def test_dry_run_lists_every_relevant_case_including_up_to_date_ones(self):
+        current = {"ticket_number": "T1", "title": "t1", "customer": "c1", "is_new": False, "stale": False}
+        new_case = self._new_case("T2")
+        run_stage = mock.Mock()
+        with mock.patch("builtins.print") as fake_print:
+            self._run([current, new_case], run_stage, argv=["--dry-run"])
+        run_stage.assert_not_called()
+        printed = "\n".join(str(c.args[0]) for c in fake_print.call_args_list if c.args)
+        self.assertIn("T1", printed)
+        self.assertIn("T2", printed)
+
+    def test_no_relevant_cases_is_a_clean_no_op(self):
         rc = self._run([], mock.Mock())
         self.assertEqual(rc, 0)
 
     def test_a_report_file_is_written_under_report_dir(self):
-        cases = [{"ticket_number": "T1", "title": "t", "customer": "c"}]
+        cases = [self._new_case("T1")]
         self._run(cases, lambda script, number: 1)  # brief fails -- still writes a report
         written = glob.glob(os.path.join(self.tmp, "gets", "get-*.md"))
         self.assertEqual(len(written), 1)
         with open(written[0], "r", encoding="utf-8") as f:
             self.assertIn("T1", f.read())
 
-    def test_sort_orders_the_triage_summary_by_difficulty(self):
-        # Two cases, both "succeeding" with different difficulty ratings --
-        # --sort easiest should print/report T2 (2/10) before T1 (7/10)
-        # even though T1 was processed first.
-        cases = [{"ticket_number": "T1", "title": "t1", "customer": "c1"},
-                 {"ticket_number": "T2", "title": "t2", "customer": "c2"}]
+    def test_default_sort_orders_the_triage_summary_easiest_first(self):
+        # No --sort flag at all -- easiest-first is now the default, not
+        # an opt-in.
+        cases = [self._new_case("T1", "t1", "c1"), self._new_case("T2", "t2", "c2")]
         difficulties = {"T1": "7/10 -- hard", "T2": "2/10 -- easy"}
 
         def fake_run_stage(script, number):
@@ -392,12 +510,28 @@ class MainLoopTests(unittest.TestCase):
             return 0
 
         with mock.patch("builtins.print") as fake_print:
-            self._run(cases, fake_run_stage, argv=["--sort", "easiest"])
+            self._run(cases, fake_run_stage)
         printed = "\n".join(str(c.args[0]) for c in fake_print.call_args_list if c.args)
         # The bulleted triage-summary lines specifically ("- T2 (..."),
         # not just any mention of the case number -- both cases' own
         # "=== T1 ===" / "=== T2 ===" processing headers print in the
         # original (unsorted) order regardless of --sort.
+        self.assertLess(printed.index("- T2 ("), printed.index("- T1 ("))
+
+    def test_sort_hardest_reverses_the_default(self):
+        cases = [self._new_case("T1", "t1", "c1"), self._new_case("T2", "t2", "c2")]
+        difficulties = {"T1": "2/10 -- easy", "T2": "7/10 -- hard"}
+
+        def fake_run_stage(script, number):
+            base = "brief" if os.path.basename(script) == "case_brief.py" else "guide"
+            content = _brief() if base == "brief" else _guide(f"**Implementation Difficulty:** {difficulties[number]}")
+            with open(os.path.join(self.tmp, base, f"{base}-{number}.md"), "w", encoding="utf-8") as f:
+                f.write(content)
+            return 0
+
+        with mock.patch("builtins.print") as fake_print:
+            self._run(cases, fake_run_stage, argv=["--sort", "hardest"])
+        printed = "\n".join(str(c.args[0]) for c in fake_print.call_args_list if c.args)
         self.assertLess(printed.index("- T2 ("), printed.index("- T1 ("))
 
 

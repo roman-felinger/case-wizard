@@ -13,9 +13,9 @@ from a terminal.
 
 A fourth script, `case-getter`, finds the work in the first place: it lists every
 CRM case nobody has picked up yet (plus every active case already assigned to
-whoever is signed in) and runs brief + guide for whichever of those don't already
-have a brief, so you get a ready-to-triage list instead of having to go looking
-case by case.
+whoever is signed in), (re)runs brief + guide for whichever are new or out of
+date, and prints the whole list sorted by difficulty — so you get a ready-to-triage
+list instead of having to go looking case by case.
 
 ## Setup
 
@@ -70,19 +70,23 @@ each stage's script in a subprocess, in order, the same as running them by hand.
 
 Lists every active CRM case that's either still owned by the CRM's default
 unassigned-case team ("Helpdesk e-mail" — nobody's claimed it yet) or already
-owned by whoever is signed in — and, for whichever of those don't already have a
-brief on disk, runs case-brief then case-guide for it (same as `case_wizard.py all
-<code> --stop-after guide`, one case at a time; one case failing doesn't stop the
-rest). Prints a triage summary at the end: case number, whether it's unclaimed or
-already yours, title, customer, and the implementation difficulty rating pulled
-out of the guide it just wrote. Every run (including `--dry-run`) also writes that
-same summary to `case-getter/gets/get-<timestamp>.md`.
+owned by whoever is signed in, and prints a triage list of *all* of them, sorted
+by implementation difficulty (easiest first by default) — never just "nothing
+new found", since there's always a real list to see even when nothing's changed
+since the last run. Only some of them actually get (re)processed: a case with no
+brief on disk yet, or whose brief predates the CRM record's last edit, gets
+case-brief then case-guide run for it (same as `case_wizard.py all <code>
+--stop-after guide`, one case at a time; one case failing doesn't stop the rest).
+A case that already has an up-to-date brief/guide is left alone — its existing
+title/customer/difficulty is just read back for the list. Every run (including
+`--dry-run`) writes that same triage list to `case-getter/gets/get-<timestamp>.md`.
 
 ```bash
-python case-getter/case_getter.py                # brief + guide every new, unassigned case
+python case-getter/case_getter.py                # refresh stale/new cases, list every relevant one
 python case_wizard.py getter                      # same thing
-python case-getter/case_getter.py --dry-run       # just list what would be picked up
-python case-getter/case_getter.py --limit 3       # cap how many cases to process this run
+python case-getter/case_getter.py --dry-run       # just list what's relevant, no writes
+python case-getter/case_getter.py --limit 3       # cap how many new/stale cases to (re)process this run
+python case-getter/case_getter.py --sort hardest  # triage list hardest-first instead of easiest-first
 ```
 
 Needs the same CRM/Azure DevOps/`claude` access as case-brief and case-guide — it's
@@ -195,7 +199,7 @@ python run_tests.py brief guide  # just these
 - **Solve:** MVP — clone/branch/dependency-install verified, 141 tests
   (`case-solve/tests/`); a real end-to-end Claude implementation run against a live
   repo is the main thing left to exercise
-- **Getter:** working, verified against live CRM data; 26 tests (`case-getter/tests/`)
+- **Getter:** working, verified against live CRM data; 56 tests (`case-getter/tests/`)
 
 See `CLAUDE.md` for architecture notes and the troubleshooting section below if
 something's not working.
