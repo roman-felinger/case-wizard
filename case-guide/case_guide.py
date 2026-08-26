@@ -3,7 +3,7 @@
 
 A companion to case-brief, but a fully independent project -- it doesn't
 import case-brief's code, it just reads the Markdown brief case-brief's
-case_brief.py already wrote (case-brief/case-briefs/case-<code>.md by
+case_brief.py already wrote (case-brief/briefs/brief-<code>.md by
 default) and re-queries Azure DevOps itself for one level of extra depth on
 each related branch/PR the brief mentions: commit messages, changed file
 paths, and review-thread comments -- context the brief's own summary
@@ -62,8 +62,8 @@ MAX_ADO_DETAIL_CHARS = 20000
 MAX_EXAMPLE_CHARS = 4000
 
 DEFAULTS = {
-    "brief_dir": "../case-brief/case-briefs",
-    "output_dir": "./case-guides",
+    "brief_dir": "../case-brief/briefs",
+    "output_dir": "./guides",
     "azure_devops": {
         "org_url": None,
         "project": None,
@@ -97,7 +97,7 @@ def _sanitize_case_number(case_number):
 
 
 def find_brief(brief_dir, case_number):
-    """The exact case-<code>.md case-brief would have written, or -- in
+    """The exact brief-<code>.md case-brief would have written, or -- in
     case the case code was typed slightly differently than the brief's
     filename -- a unique substring match. Ambiguous or missing matches are
     reported rather than guessed."""
@@ -107,7 +107,7 @@ def find_brief(brief_dir, case_number):
     def _within_brief_dir(path):
         return os.path.commonpath([brief_dir_real, os.path.realpath(path)]) == brief_dir_real
 
-    exact = os.path.join(brief_dir, f"case-{safe_number}.md")
+    exact = os.path.join(brief_dir, f"brief-{safe_number}.md")
     if os.path.exists(exact) and _within_brief_dir(exact):
         return exact
     matches = sorted(
@@ -324,24 +324,36 @@ to finish. Cover, in this order:
 
 1. **What this case is about** -- a plain-language summary of the customer's problem, pulled \
    from the case description below.
-2. **Implementation difficulty** -- one line, right after the summary: \
+2. **Readiness check** -- one line, right after the summary: `**Ready for Implementation:** Yes` \
+   or `**Ready for Implementation:** No -- <short reason>`. Answer No only when the case is \
+   blocked on something a developer cannot resolve alone -- info only the customer can supply, \
+   a decision or approval only a team lead/manager can make, or an action that depends on \
+   another person or team. Answer Yes even when the case is difficult, ambiguous, or \
+   under-specified in ways a competent developer could reasonably resolve while implementing --
+   this line is about who has to act next, not how hard the work is. If the answer is No, add a \
+   "## Before You Start -- Social Steps" section immediately after this line (before the rest of \
+   the guide) with a concrete numbered list of what to do -- e.g. "Reply to the customer asking \
+   whether X or Y is intended", "Ask your team lead whether this needs manager sign-off", "Call \
+   [team/person] to confirm Z". If the answer is Yes, do not add that section at all.
+3. **Implementation difficulty** -- one line, right after the readiness check: \
    `**Implementation Difficulty:** X/10 -- <short reason>`, where X is picked from the fixed \
    DIFFICULTY RUBRIC below. Use those bands as given -- don't invent your own scale or wording \
-   for them, so difficulty stays comparable across different guides/cases.
-3. **Get set up** -- the exact `git clone` / `cd` / `git checkout -b` commands to run (use the \
+   for them, so difficulty stays comparable across different guides/cases. Rate it even when \
+   readiness above is No -- it's still useful once the social steps are resolved.
+4. **Get set up** -- the exact `git clone` / `cd` / `git checkout -b` commands to run (use the \
    suggested repo/branch below if present; otherwise say plainly that no repo has been \
    identified yet and what to do about it). If the suggested repo below is marked as guessed \
    (fuzzy-matched from the customer name, not confirmed in Azure DevOps), you MUST carry that \
    warning into this section verbatim -- never drop it or present a guess as a confirmed repo.
-4. **What's already been tried** -- if there are related branches/PRs below, summarize concretely \
+5. **What's already been tried** -- if there are related branches/PRs below, summarize concretely \
    what they changed (from their commit messages / changed files / review comments) and whether \
    they look finished, still in review, or abandoned. If there's nothing related, say so plainly.
-5. **What still needs to be developed, and how** -- a concrete, numbered plan grounded in the \
+6. **What still needs to be developed, and how** -- a concrete, numbered plan grounded in the \
    actual case description and whatever the related branches/PRs reveal about the codebase's \
    shape -- not generic advice. Call out open questions if the material below isn't specific \
    enough to be concrete about something.
-6. **How to verify and ship it** -- how to test the fix against the case description, and how to \
-   get it reviewed/merged (PR against the branch/repo from step 3).
+7. **How to verify and ship it** -- how to test the fix against the case description, and how to \
+   get it reviewed/merged (PR against the branch/repo from step 4).
 
 Be concrete wherever the material below supports it; be honest about gaps rather than inventing \
 detail that isn't there. Output only the Markdown guide itself, nothing else -- no preamble, no \
@@ -420,6 +432,24 @@ def _has_difficulty_rating(text):
     return bool(_DIFFICULTY_RE.search(text[:1000]))
 
 
+# case-solve reads this exact line back out of the finished guide to decide
+# whether to implement at all (see case-solve/CLAUDE.md's "Social readiness
+# gate" section) -- a filesystem-contract shape, same pattern as
+# _CASE_TITLE_RE/_CUSTOMER_RE parsing case-brief's output above. Keep this
+# regex and case-solve's copy of it in sync if the wording ever changes.
+_READINESS_RE = re.compile(r"(?im)\*\*Ready for Implementation:\*\*\s*(Yes|No)\b")
+
+
+def _has_readiness_marker(text):
+    """Same spirit as _has_difficulty_rating: a loose, warn-only check that
+    claude actually answered the "Readiness check" instruction (see
+    PROMPT_TEMPLATE) instead of silently dropping it -- case-solve depends
+    on this line being present to know whether it's safe to implement.
+    Never blocks writing the file -- a human can judge the actual content
+    far better than this can."""
+    return bool(_READINESS_RE.search(text[:1000]))
+
+
 def call_claude(prompt, model=None, extra_args=None, timeout=600, agent_name=None):
     """One-shot headless call: the prompt carries all the context Claude
     needs inline, so there's nothing here for it to read/write/run -- a
@@ -484,8 +514,8 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("case_number", help="Case code to write a guide for, e.g. T2611845 (must already have a brief -- run case-brief's case_brief.py first)")
-    parser.add_argument("--brief-dir", metavar="DIR", help="Where to look for the case brief (default: config.json's brief_dir, ../case-brief/case-briefs)")
-    parser.add_argument("--output-dir", metavar="DIR", help="Where to write the guide (default: config.json's output_dir, ./case-guides)")
+    parser.add_argument("--brief-dir", metavar="DIR", help="Where to look for the case brief (default: config.json's brief_dir, ../case-brief/briefs)")
+    parser.add_argument("--output-dir", metavar="DIR", help="Where to write the guide (default: config.json's output_dir, ./guides)")
     parser.add_argument("--org-url", metavar="URL", help="Azure DevOps org URL override, e.g. https://dev.azure.com/myorg")
     parser.add_argument("--project", metavar="NAME", help="Restrict the Azure DevOps search to one project (default: config.json's azure_devops.project, or search every project in the org)")
     parser.add_argument("--model", metavar="NAME", help="Model for the headless claude call, e.g. opus/sonnet (default: config.json's claude.model, or claude's own default)")
@@ -572,13 +602,20 @@ def main():
             "line -- writing it anyway, but take a look before trusting it.",
             file=sys.stderr,
         )
+    if not _has_readiness_marker(guide_text):
+        print(
+            "Warning: claude's output doesn't include the expected \"**Ready for Implementation:** "
+            "Yes/No\" line -- case-solve treats a missing marker as ready by default, so double-check "
+            "this guide before running case-solve on it.",
+            file=sys.stderr,
+        )
 
     guide_text = _add_guess_warning(guide_text, suggested_repos)
 
     path = writer.write_and_open(
         guide_text,
         output_dir,
-        f"case-{args.case_number}",
+        f"guide-{args.case_number}",
     )
     print(f"\nGuide written to {path}")
 

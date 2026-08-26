@@ -20,6 +20,20 @@ need for any tool, and nothing to read/write/run.
   genuinely has that much distinct, concrete material to cover; going
   longer to sound thorough is not a reason.
 
+## Readiness check
+
+The prompt asks for one line right after the "What this case is about" summary: \
+`**Ready for Implementation:** Yes` or `**Ready for Implementation:** No — <short reason>`. \
+Answer No only when a developer genuinely can't proceed alone — the case needs the customer \
+to answer something, a team lead/manager to decide or approve something, or another person/team \
+to act first. A case that's merely hard, ambiguous, or under-specified in ways you could \
+reasonably resolve while implementing still gets Yes. When it's No, add a \
+"## Before You Start — Social Steps" section right after that line, before anything else, with \
+a short numbered list of concrete actions (who to contact, what to ask, what to confirm) — not \
+vague advice like "clarify requirements." case-solve reads this line to decide whether to start \
+implementing at all, so get the wording right: `**Ready for Implementation:** Yes` / `No — ...`, \
+exactly as shown.
+
 ## Implementation difficulty
 
 The prompt gives you a fixed 1-10 DIFFICULTY RUBRIC and asks for one line

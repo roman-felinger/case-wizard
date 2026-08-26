@@ -35,18 +35,18 @@ class FindBriefTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.brief_dir = self.tmp.name
-        open(os.path.join(self.brief_dir, "case-T111.md"), "w").close()
+        open(os.path.join(self.brief_dir, "brief-T111.md"), "w").close()
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def test_exact_match(self):
         path = cg.find_brief(self.brief_dir, "T111")
-        self.assertEqual(os.path.basename(path), "case-T111.md")
+        self.assertEqual(os.path.basename(path), "brief-T111.md")
 
     def test_ambiguous_match_exits_rather_than_guessing(self):
-        open(os.path.join(self.brief_dir, "case-T3330.md"), "w").close()
-        open(os.path.join(self.brief_dir, "case-T3331.md"), "w").close()
+        open(os.path.join(self.brief_dir, "brief-T3330.md"), "w").close()
+        open(os.path.join(self.brief_dir, "brief-T3331.md"), "w").close()
         with self.assertRaises(SystemExit):
             cg.find_brief(self.brief_dir, "T333")
 
@@ -309,6 +309,11 @@ class BuildPromptDifficultyRubricTests(unittest.TestCase):
         self.assertIn("**Implementation Difficulty:** X/10", prompt)
         self.assertIn("don't invent your own scale", prompt)
 
+    def test_instructs_claude_to_output_a_readiness_line(self):
+        prompt = self._prompt()
+        self.assertIn("**Ready for Implementation:** Yes", prompt)
+        self.assertIn("Before You Start -- Social Steps", prompt)
+
 
 class HasDifficultyRatingTests(unittest.TestCase):
     def test_true_when_the_expected_line_is_present(self):
@@ -326,6 +331,20 @@ class HasDifficultyRatingTests(unittest.TestCase):
     def test_matches_regardless_of_which_of_the_ten_bands(self):
         text = "**Implementation Difficulty:** 10/10 -- architecture-level.\n"
         self.assertTrue(cg._has_difficulty_rating(text))
+
+
+class HasReadinessMarkerTests(unittest.TestCase):
+    def test_true_for_yes(self):
+        text = "# Case T1\n\n**Ready for Implementation:** Yes\n"
+        self.assertTrue(cg._has_readiness_marker(text))
+
+    def test_true_for_no_with_reason(self):
+        text = "# Case T1\n\n**Ready for Implementation:** No -- waiting on customer reply\n"
+        self.assertTrue(cg._has_readiness_marker(text))
+
+    def test_false_when_missing_entirely(self):
+        text = "# Case T1\n\n## What this case is about\nSomething.\n"
+        self.assertFalse(cg._has_readiness_marker(text))
 
 
 class ExtractFromBriefTests(unittest.TestCase):
