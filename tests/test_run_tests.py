@@ -49,7 +49,7 @@ class MainTests(unittest.TestCase):
         with mock.patch("run_tests.pytest_available", return_value=True):
             self.assertEqual(run_tests.main(["bogus"]), 2)
 
-    def test_defaults_to_all_three_stages(self):
+    def test_defaults_to_every_stage(self):
         with mock.patch("run_tests.pytest_available", return_value=True), \
              mock.patch("run_tests.run_stage", side_effect=self._ok) as run_stage:
             rc = run_tests.main([])

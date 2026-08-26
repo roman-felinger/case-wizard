@@ -80,6 +80,14 @@ class MainDispatchTests(unittest.TestCase):
             case_wizard.main(["solve", "T1", "--repo", "u"])
         run_one.assert_called_once_with("solve", ["T1", "--repo", "u"])
 
+    def test_getter_delegates_to_run_one_despite_being_outside_stages(self):
+        # "getter" is in SCRIPTS but deliberately not in STAGES/`all` (it
+        # operates over many cases, not one case_number) -- dispatch must
+        # still find it via SCRIPTS, not STAGES.
+        with mock.patch("case_wizard.run_one", return_value=0) as run_one:
+            case_wizard.main(["getter", "--dry-run"])
+        run_one.assert_called_once_with("getter", ["--dry-run"])
+
 
 class ChainTests(unittest.TestCase):
     def test_runs_all_three_by_default(self):
