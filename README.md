@@ -63,15 +63,17 @@ each stage's script in a subprocess, in order, the same as running them by hand.
 ### 1. case-brief — gather context
 
 Looks up the case from CRM via the Dataverse Web API, authenticated with OAuth
-(Entra ID) device-code sign-in (`--skip-crm` to disable), and resolves any Azure
-DevOps PR/branch links already pasted into the case (`--skip-ado` to disable). No
-config file — org/CRM/OAuth client are fixed constants (this tool only ever talks
-to one org and one CRM).
+(Entra ID) device-code sign-in, and resolves any Azure DevOps PR/branch links
+already pasted into the case. No config file — org/CRM/OAuth client are fixed
+constants (this tool only ever talks to one org and one CRM). There's no
+CRM-skipping or ADO-skipping flag: the Azure DevOps lookup always runs (fails safe
+into an "## Related Links" error note rather than breaking the run if it can't
+complete), and Azure DevOps results are only ever resolved from links found *in*
+the CRM case text, so without a CRM lookup there's nothing to report either way.
 
 ```bash
 python case-brief/case_brief.py --demo             # fake data, fastest smoke test
 python case-brief/case_brief.py T2611845            # real run
-python case-brief/case_brief.py T2611845 --skip-crm # ADO only, no CRM sign-in
 python case-brief/case_brief.py -h
 ```
 

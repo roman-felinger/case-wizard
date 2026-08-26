@@ -14,7 +14,6 @@ design-rationale notes.
 
 python case-brief/case_brief.py --demo        # fake data, no API calls -- fastest smoke test
 python case-brief/case_brief.py T2611845      # real run: CRM lookup (OAuth) + ADO direct-reference resolution
-python case-brief/case_brief.py --skip-crm    # ADO-only, no CRM sign-in
 
 python case-guide/case_guide.py T2611845      # needs a brief already on disk, and the claude CLI on PATH
 python case-guide/case_guide.py 12345         # smoke test: reads the checked-in demo brief
@@ -28,7 +27,7 @@ python run_tests.py                              # all three stages' test suites
 python -m unittest discover -s tests -v           # from any one stage's own directory, or repo root for case_wizard.py's own tests
 ```
 
-Test counts: case-brief 123, case-guide 84, case-solve 141, root (`case_wizard.py`) 29
+Test counts: case-brief 142, case-guide 90, case-solve 141, root (`case_wizard.py`) 29
 — all mocked, no network. Deliberately not exhaustive over every CLI flag or every
 low-risk rendering/plumbing branch; those are easily eyeballed with `--demo`-style
 manual runs. What no test suite here can cover: a real `claude` call, a live Azure
@@ -160,13 +159,15 @@ Azure DevOps branches/PRs resolved from a direct reference in the CRM case, the
 Dev tab's `related_links` grid above, and finally the case's own Helpdesk portal
 link, in that order — see `report._related_links_lines`/`HELPDESK_LINK_FIELD`) and
 one "## Details" section (Description, the promoted description fields, Notes,
-Activity Timeline). Whatever was actually found in Related Links is listed first;
-a single "_No related links found in the CRM case._" line only appears at the very
-end, and only if the combined list (branches + PRs + CRM related links + Helpdesk
-link) came up completely empty — never as an upfront assumption ahead of the
-search's own results, which is what the old per-category "No direct Azure DevOps
-link found"/"No matching branches found"/"No matching pull requests found"
-messages did. The Helpdesk link field (`art_helpdesklink`) is matched by
+Activity Timeline). Whatever was actually found in either section is listed as its
+own line/bullet; whichever of that section's own members came up empty (with no
+error — an error already explains itself) are named together in one combined line
+at the end of that section — e.g. `_No branches, pull requests, related links, and
+a Helpdesk link found for this case._` or `_No Dodatečný veřejný popis, notes, and
+activity timeline entries found for this case._` (see `report._join_and`) — rather
+than either a single blanket "nothing found" line that stays silent about which
+specific thing is missing, or a separate "not found" line per missing member
+cluttering the section. The Helpdesk link field (`art_helpdesklink`) is matched by
 logical_name the same way `DEFAULT_PROMOTED_FIELDS` is, but rendered as a link in
 Related Links instead of a text block under Details, and excluded from "Other CRM
 Fields" the same way promoted fields are.
@@ -337,6 +338,26 @@ same conclusion from scratch.
 
 ## Removed in the 2026-08-26 simplification pass
 
+- `case-brief`'s `--skip-crm` flag — never actually gave a usable "ADO-only" mode:
+  `run_ado_lookup` only ever resolves branches/PRs from a direct reference it finds
+  *in the CRM case's own text* (see `_collect_reference_text`) — there is no
+  broader org-wide search (see `lib/ado_api.py`'s module docstring for why). With
+  the CRM lookup skipped there was nothing to scan, so every `--skip-crm` run
+  produced a brief with no CRM data and no ADO data either — a flag that looked
+  like a real mode but could only ever produce an empty file. Removed rather than
+  fixed: there was no ADO-only mode to make work without adding the org-wide
+  search this tool deliberately doesn't do.
+- `case-brief`'s `--skip-ado` flag — the Azure DevOps lookup now always runs
+  unconditionally instead of being optional. It was already effectively
+  best-effort (a single failed branch/PR resolution was caught and counted per-item
+  rather than raised, see `run_ado_lookup`'s docstring), so `main` now also wraps
+  the call to `run_ado_lookup` itself in a try/except -- an unexpected failure
+  (e.g. `ado_api.parse_direct_references` raising) sets `ado_error` and the brief
+  still gets built and written with whatever CRM data was gathered, instead of the
+  whole run dying with nothing written. `--skip-ado` had no real use case left once
+  the lookup can't break the run: it only ever added latency on a case with no ADO
+  references to find, which the lookup already resolves quickly and reports as
+  "not found" rather than erroring.
 - `msal` dependency — was listed in every `requirements.txt` but never actually
   imported anywhere in the codebase.
 - VS Code auto-open (`shared/editor.py`, every stage's `--no-open` flag,
@@ -367,8 +388,9 @@ than kept as a second, parallel path:
   `.last_urls.json` cache, ...).
 - `case_brief.py`'s `run_browser_scrape`/`_try_headless_scrape`/`_remember_crm_url`,
   the `CHROME_CFG`/`CRM_HOST_CONTAINS` constants, and the `--keep-browser-open` flag.
-  `--skip-browser` was renamed `--skip-crm` (still ADO-only, just no longer
-  browser-specific wording now that CRM auth never opens a browser).
+  `--skip-browser` was renamed `--skip-crm` at the time (still ADO-only, just no
+  longer browser-specific wording now that CRM auth never opens a browser) — since
+  removed outright, see "Removed in the 2026-08-26 simplification pass" below.
   There is no `--api` flag — Dataverse OAuth is simply how CRM auth works now, not
   an opt-in alternative to something else.
 - The `playwright` dependency and the `python -m playwright install chromium`

@@ -21,7 +21,6 @@ here is either a CLI flag or a fixed constant. Run with -h to see the flags.
 
 Examples:
     python case_brief.py T2611845                  # look up this case directly
-    python case_brief.py T2611845 --skip-ado
     python case_brief.py --demo                    # no API calls, sample data
 """
 import argparse
@@ -109,6 +108,14 @@ def run_ado_lookup(crm_results):
     related links and the Helpdesk link too, not just this text scan) once
     it's seen the combined result come up empty, so there's no need for a
     redundant, ADO-specific "nothing found" message here.
+
+    A single failed reference is caught and counted per-item (folded into
+    `ado_note`, see below) rather than raised, so this function itself
+    never actually returns a non-None `ado_error` -- that slot in the
+    return tuple only ever gets populated by `main`'s own try/except around
+    the call to this function, for a failure this function didn't already
+    handle (e.g. `ado_api.parse_direct_references` itself raising). Always
+    runs, never optional -- see main()'s call site.
     """
     ref_text = _collect_reference_text(crm_results)
     pr_refs, branch_refs = ado_api.parse_direct_references(ref_text)
@@ -236,12 +243,10 @@ def build_parser():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("case_number", nargs="?", help="CRM ticket number (required unless --demo or --skip-crm is used)")
+    parser.add_argument("case_number", nargs="?", help="CRM ticket number (required unless --demo is used)")
 
     modes = parser.add_argument_group("modes")
     modes.add_argument("--demo", action="store_true", help="Use sample data, no network/API calls")
-    modes.add_argument("--skip-ado", action="store_true", help="Don't search Azure DevOps")
-    modes.add_argument("--skip-crm", action="store_true", help="Skip the CRM lookup entirely (Azure DevOps only)")
 
     return parser
 
@@ -250,11 +255,15 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
-    # case_number is only optional for --demo (fake data) and --skip-crm
-    # (ADO-only, nothing to look up in CRM) -- the real lookup always needs
-    # a ticket number.
-    if not args.demo and not args.skip_crm and not args.case_number:
-        parser.error("case_number is required (pass a ticket number, or use --demo / --skip-crm)")
+    # case_number is only optional for --demo (fake data) -- the real
+    # lookup always needs a ticket number. There is no ADO-only mode: ADO
+    # results here are resolved from direct references found *in* the CRM
+    # case text (see run_ado_lookup/_collect_reference_text), so without a
+    # CRM lookup there is nothing to scan and the brief would always come
+    # back empty -- skipping CRM was never actually a usable "ADO-only"
+    # mode, just a flag that silently produced nothing.
+    if not args.demo and not args.case_number:
+        parser.error("case_number is required (pass a ticket number, or use --demo)")
 
     crm_results, branches, pull_requests, ado_error, ado_note = [], [], [], None, None
 
@@ -264,18 +273,25 @@ def main():
             crm_results, branches, pull_requests = demo_data(args.case_number)
             progress_success("Demo data loaded")
         else:
-            if not args.skip_crm:
-                progress("Signing in to Dataverse (OAuth)...", status="running")
-                crm_results = run_crm_lookup(args.case_number)
-                progress_success("CRM data extracted", f"Found {len(crm_results)} cases")
+            progress("Signing in to Dataverse (OAuth)...", status="running")
+            crm_results = run_crm_lookup(args.case_number)
+            progress_success("CRM data extracted", f"Found {len(crm_results)} cases")
 
-            if not args.skip_ado:
-                progress("Looking for direct Azure DevOps references in CRM...", status="running")
+            progress("Looking for direct Azure DevOps references in CRM...", status="running")
+            try:
                 branches, pull_requests, ado_error, ado_note = run_ado_lookup(crm_results)
-                if ado_error:
-                    progress_error("Azure DevOps lookup failed", ado_error)
-                else:
-                    progress_success("Azure DevOps lookup complete", ado_note or f"Found {len(branches)} branches, {len(pull_requests)} PRs")
+            except Exception as e:
+                # Always runs, never optional -- but must never take the
+                # whole brief down with it. An expired/under-scoped PAT or
+                # some other ADO-side failure here still means a CRM-only
+                # brief gets written (with the failure noted in "## Related
+                # Links" via ado_error), not a run that dies with nothing
+                # written at all.
+                branches, pull_requests, ado_error, ado_note = [], [], str(e), None
+            if ado_error:
+                progress_error("Azure DevOps lookup failed", ado_error)
+            else:
+                progress_success("Azure DevOps lookup complete", ado_note or f"Found {len(branches)} branches, {len(pull_requests)} PRs")
 
         case_number = args.case_number
         if not case_number and crm_results and not crm_results[0].get("error"):
