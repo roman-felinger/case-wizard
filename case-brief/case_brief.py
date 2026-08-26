@@ -286,7 +286,6 @@ def build_parser():
     modes.add_argument("--demo", action="store_true", help="Use sample data, no network/browser/API calls")
     modes.add_argument("--skip-ado", action="store_true", help="Don't search Azure DevOps")
     modes.add_argument("--skip-browser", action="store_true", help="Skip CRM browser scraping entirely (Azure DevOps only)")
-    modes.add_argument("--no-open", action="store_true", help="Don't open the result in VS Code")
     modes.add_argument(
         "--keep-browser-open", action="store_true",
         help="Don't close the automation Chrome window when done (default: close it).",
@@ -347,7 +346,6 @@ def main():
             markdown,
             os.path.join(HERE, OUTPUT_DIR),
             case_number,
-            open_in_vscode=not args.no_open,
         )
         progress_success("Brief complete", f"Written to {path}")
 

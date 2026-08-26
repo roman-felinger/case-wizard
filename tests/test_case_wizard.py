@@ -51,8 +51,8 @@ class ApplyDemoDefaultTests(unittest.TestCase):
 
     def test_guide_demo_with_other_flags_defaults_the_case_number(self):
         self.assertEqual(
-            case_wizard.apply_demo_default("guide", ["--demo", "--no-open"]),
-            [case_wizard.DEMO_CASE_NUMBER, "--no-open"],
+            case_wizard.apply_demo_default("guide", ["--demo", "--no-example"]),
+            [case_wizard.DEMO_CASE_NUMBER, "--no-example"],
         )
 
     def test_explicit_case_number_wins_over_demo_default(self):
@@ -113,10 +113,10 @@ class ChainTests(unittest.TestCase):
 
     def test_per_stage_extra_args_are_appended(self):
         with mock.patch("case_wizard.run_one", return_value=0) as run_one:
-            case_wizard.run_chain(["T1", "--brief-arg=--demo", "--guide-arg=--no-open"])
+            case_wizard.run_chain(["T1", "--brief-arg=--demo", "--guide-arg=--no-example"])
         calls = {c.args[0]: c.args[1] for c in run_one.call_args_list}
         self.assertEqual(calls["brief"], ["T1", "--demo"])
-        self.assertEqual(calls["guide"], ["T1", "--no-open"])
+        self.assertEqual(calls["guide"], ["T1", "--no-example"])
 
 
 if __name__ == "__main__":

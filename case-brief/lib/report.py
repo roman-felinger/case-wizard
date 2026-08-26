@@ -4,7 +4,6 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from shared.editor import open_in_editor
 from shared.safe_name import safe_name as _safe_name
 
 
@@ -206,14 +205,11 @@ def build_markdown(case_number, crm_results, branches, pull_requests,
     return "\n".join(lines)
 
 
-def write_and_open(markdown, output_dir, case_number, open_in_vscode=True):
+def write_and_open(markdown, output_dir, case_number):
     os.makedirs(output_dir, exist_ok=True)
     filename = f"case-{_safe_name(case_number)}.md"
     path = os.path.join(output_dir, filename)
     with open(path, "w", encoding="utf-8") as f:
         f.write(markdown)
-
-    if open_in_vscode:
-        open_in_editor(path)
 
     return path

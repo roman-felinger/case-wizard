@@ -6,9 +6,8 @@ CLAUDE.md: "CRM and ADO results are plain dicts/lists by the time they
 reach [report.py], with no formatting logic living in the scrapers
 themselves"). Focus is on the things that would silently produce a
 misleading brief rather than an ugly one: missing/empty sections must say so
-explicitly rather than rendering blank, an ado_error must suppress stale
-branch/PR content instead of showing both, and `write_and_open` must never
-let a missing/failing `code` executable stop the brief from being written.
+explicitly rather than rendering blank, and an ado_error must suppress stale
+branch/PR content instead of showing both.
 Deliberately not exhaustive over exact Markdown wording/spacing -- that's
 low-risk and easy to eyeball via `--demo`.
 
@@ -19,7 +18,6 @@ import os
 import sys
 import tempfile
 import unittest
-from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib import report
@@ -253,9 +251,7 @@ class WriteAndOpenTests(unittest.TestCase):
         # the result is always one filename directly inside output_dir and
         # can never escape it as a nested/relative path.
         with tempfile.TemporaryDirectory() as d:
-            with mock.patch("shared.editor.subprocess.run") as run_mock:
-                path = report.write_and_open("content", d, "T1/../2", open_in_vscode=False)
-            run_mock.assert_not_called()
+            path = report.write_and_open("content", d, "T1/../2")
             self.assertTrue(os.path.exists(path))
             self.assertEqual(os.path.dirname(os.path.abspath(path)), os.path.abspath(d))
             basename = os.path.basename(path)
@@ -267,21 +263,7 @@ class WriteAndOpenTests(unittest.TestCase):
     def test_creates_output_dir_if_missing(self):
         with tempfile.TemporaryDirectory() as d:
             nested = os.path.join(d, "not-yet-created")
-            with mock.patch("shared.editor.subprocess.run"):
-                path = report.write_and_open("content", nested, "T1", open_in_vscode=False)
-            self.assertTrue(os.path.exists(path))
-
-    def test_open_in_vscode_true_invokes_subprocess_run(self):
-        with tempfile.TemporaryDirectory() as d:
-            with mock.patch("shared.editor.shutil.which", return_value="C:/fake/code.cmd"), \
-                 mock.patch("shared.editor.subprocess.run") as run_mock:
-                report.write_and_open("content", d, "T1", open_in_vscode=True)
-            run_mock.assert_called_once()
-
-    def test_missing_code_executable_does_not_prevent_the_file_from_being_written(self):
-        with tempfile.TemporaryDirectory() as d:
-            with mock.patch("shared.editor.shutil.which", return_value=None):
-                path = report.write_and_open("content", d, "T1", open_in_vscode=True)
+            path = report.write_and_open("content", nested, "T1")
             self.assertTrue(os.path.exists(path))
 
 

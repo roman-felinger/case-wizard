@@ -45,7 +45,6 @@ from shared.console import enable_utf8_console
 enable_utf8_console()  # this script prints Unicode; see shared/console.py
 
 from shared.config import deep_merge, strip_comments
-from shared.editor import open_in_editor
 from shared.safe_name import safe_name as _safe_name
 
 HERE = Path(__file__).parent
@@ -262,14 +261,6 @@ def build_parser():
         help="Don't run build",
     )
 
-    # Misc
-    misc = parser.add_argument_group("misc")
-    misc.add_argument(
-        "--no-open",
-        action="store_true",
-        help="Don't open result in VS Code",
-    )
-
     return parser
 
 
@@ -381,9 +372,6 @@ def main():
 
     report_path = report_gen.generate(workspace.case_dir / "VERIFICATION_CHECKLIST.md")
     print(f"\n✓ Report generated: {report_path}")
-
-    if not args.no_open and not args.dry_run:
-        open_in_editor(report_path)
 
     print("\n" + "=" * 70)
     print("Next steps:")

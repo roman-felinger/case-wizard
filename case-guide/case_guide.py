@@ -30,7 +30,6 @@ and a claude call.
 Examples:
     python case_guide.py T2611845
     python case_guide.py T2611845 --model opus
-    python case_guide.py T2611845 --no-open
     python case_guide.py T2611845 --claude-arg="--permission-mode" --claude-arg="default"
 """
 import argparse
@@ -466,7 +465,6 @@ def build_parser():
     parser.add_argument("--timeout", type=int, metavar="SECONDS", help="Give up waiting on claude after this long (default: config.json's claude.timeout, 600)")
     parser.add_argument("--no-agent", action="store_true", help="Don't run claude as the case-guide-writer agent -- plain default persona instead")
     parser.add_argument("--no-example", action="store_true", help="Don't include a previous guide as a house-style example")
-    parser.add_argument("--no-open", action="store_true", help="Don't open the result in VS Code")
     return parser
 
 
@@ -493,8 +491,6 @@ def main():
     guide_path = os.path.join(output_dir, writer.guide_filename(f"case-{args.case_number}"))
     if os.path.exists(guide_path) and os.path.getmtime(guide_path) >= os.path.getmtime(brief_path):
         print(f"{guide_path} is already up to date with the brief.")
-        if not args.no_open:
-            writer.open_editor(guide_path)
         return
 
     print(f"Reading brief: {brief_path}")
@@ -545,7 +541,6 @@ def main():
         guide_text,
         output_dir,
         f"case-{args.case_number}",
-        open_in_vscode=not args.no_open,
     )
     print(f"\nGuide written to {path}")
 

@@ -47,7 +47,6 @@ def _args(**overrides):
         skip_tests=False,
         skip_lint=False,
         skip_build=False,
-        no_open=False,
     )
     base.update(overrides)
     return argparse.Namespace(**base)

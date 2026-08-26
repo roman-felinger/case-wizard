@@ -4,5 +4,4 @@
 requests>=2.31.0
 
 # Browser automation (case-brief)
-msal>=1.28
 playwright>=1.45

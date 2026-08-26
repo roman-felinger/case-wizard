@@ -1,8 +1,7 @@
 """Unit tests for lib/writer.py -- the output-filename sanitizer shared with
 case_guide.py's own case-number sanitizer (see UNSAFE_CHARS, kept in sync on
-purpose across the read side and the write side) and the small write/open
-logic built on top of it. No network involved; VS Code invocation is mocked
-out rather than actually shelling out to `code`.
+purpose across the read side and the write side) and the small write logic
+built on top of it.
 
 Run with: python -m unittest discover -s tests   (from case-guide/)
       or: python -m pytest tests                 (if pytest is installed)
@@ -11,7 +10,6 @@ import os
 import sys
 import tempfile
 import unittest
-from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib import writer
@@ -40,20 +38,6 @@ class GuideFilenameTests(unittest.TestCase):
         self.assertNotIn("\\", result)
 
 
-class OpenEditorTests(unittest.TestCase):
-    def test_does_nothing_when_code_is_not_on_path(self):
-        with mock.patch("shared.editor.shutil.which", return_value=None), \
-             mock.patch("shared.editor.subprocess.run") as run:
-            writer.open_editor("some/path.md")
-        run.assert_not_called()
-
-    def test_launches_code_when_it_is_on_path(self):
-        with mock.patch("shared.editor.shutil.which", return_value="C:\\code.cmd"), \
-             mock.patch("shared.editor.subprocess.run") as run:
-            writer.open_editor("some/path.md")
-        run.assert_called_once_with(["C:\\code.cmd", "some/path.md"], check=False)
-
-
 class WriteAndOpenTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -63,31 +47,18 @@ class WriteAndOpenTests(unittest.TestCase):
 
     def test_creates_the_output_directory_if_it_does_not_exist_yet(self):
         output_dir = os.path.join(self.tmp.name, "nested", "dir")
-        with mock.patch.object(writer, "open_editor"):
-            path = writer.write_and_open("hello", output_dir, "case-T1", open_in_vscode=False)
+        path = writer.write_and_open("hello", output_dir, "case-T1")
         self.assertTrue(os.path.isdir(output_dir))
         self.assertTrue(os.path.exists(path))
 
     def test_writes_text_with_exactly_one_trailing_newline_regardless_of_input(self):
-        with mock.patch.object(writer, "open_editor"):
-            path = writer.write_and_open("hello\n\n\n", self.tmp.name, "case-T1", open_in_vscode=False)
+        path = writer.write_and_open("hello\n\n\n", self.tmp.name, "case-T1")
         with open(path, "r", encoding="utf-8") as f:
             self.assertEqual(f.read(), "hello\n")
 
     def test_returned_path_matches_what_guide_filename_predicts(self):
-        with mock.patch.object(writer, "open_editor"):
-            path = writer.write_and_open("hello", self.tmp.name, "case-T1", open_in_vscode=False)
+        path = writer.write_and_open("hello", self.tmp.name, "case-T1")
         self.assertEqual(os.path.basename(path), writer.guide_filename("case-T1"))
-
-    def test_does_not_open_the_editor_when_disabled(self):
-        with mock.patch.object(writer, "open_editor") as open_editor:
-            writer.write_and_open("hello", self.tmp.name, "case-T1", open_in_vscode=False)
-        open_editor.assert_not_called()
-
-    def test_opens_the_editor_with_the_written_path_when_enabled(self):
-        with mock.patch.object(writer, "open_editor") as open_editor:
-            path = writer.write_and_open("hello", self.tmp.name, "case-T1", open_in_vscode=True)
-        open_editor.assert_called_once_with(path)
 
 
 if __name__ == "__main__":
