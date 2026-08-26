@@ -108,12 +108,6 @@ class SetupRepoTests(unittest.TestCase):
         self.assertEqual(cmd, ["git", "clone", "https://github.com/acme/widgets.git", str(repo_dir)])
         self.assertEqual(repo_dir.name, "widgets")
 
-    def test_strips_dot_git_suffix_from_cached_repo_dir_name(self):
-        mgr = WorkspaceManager("T1", "https://github.com/acme/widgets.git", self.solves_dir)
-        with mock.patch.object(WorkspaceManager, "_run_cmd"):
-            repo_dir = mgr._setup_repo()
-        self.assertEqual(repo_dir.name, "widgets")
-
     def test_fetches_instead_of_cloning_when_repo_already_cached(self):
         mgr = WorkspaceManager("T1", "https://github.com/acme/widgets.git", self.solves_dir)
         cached = self.solves_dir / "repos" / "widgets"

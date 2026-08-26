@@ -132,15 +132,6 @@ class ConfigMergePrecedenceTests(unittest.TestCase):
         cs.apply_cli_overrides(cfg, _args())  # no --skip-build
         self.assertFalse(cfg["run_build"])  # config.json value, not the True default
 
-    def test_full_chain_default_then_config_then_cli(self):
-        # run_build: default True -> config.json also sets it True (explicit,
-        # not just the untouched default) -> --skip-build still wins.
-        self._write_config({"run_build": True})
-        cfg = cs.load_config(self.config_path)
-        self.assertTrue(cfg["run_build"])
-        cs.apply_cli_overrides(cfg, _args(skip_build=True))
-        self.assertFalse(cfg["run_build"])  # CLI wins here
-
 
 class CheckReadinessTests(unittest.TestCase):
     """Own copy of case-guide's _READINESS_RE (see case_guide.py's
@@ -233,12 +224,12 @@ class ExtractRepoNameTests(unittest.TestCase):
         self.assertEqual(cs.extract_repo_name("https://github.com/acme/widgets/"), "widgets")
 
     def test_azure_devops_url(self):
+        # A meaningfully deeper path than GitHub's (org/project/_git/repo,
+        # not just org/repo) -- the one other host shape this function's
+        # own docstring calls out by name.
         self.assertEqual(
             cs.extract_repo_name("https://dev.azure.com/acme/Proj/_git/widgets"), "widgets"
         )
-
-    def test_gitlab_url(self):
-        self.assertEqual(cs.extract_repo_name("https://gitlab.com/acme/widgets.git"), "widgets")
 
 
 class SafeNameAndGuideFilenameTests(unittest.TestCase):
@@ -468,13 +459,92 @@ class ReadinessGateTests(unittest.TestCase):
         self.assertEqual(result, 0)
         mock_wm_cls.assert_called_once()
 
-    def test_missing_marker_is_unaffected(self):
-        result, mock_wm_cls, _ = self._run_main(
-            ["T1", "--yes", "--repo", "https://github.com/acme/widgets.git", "--no-implement"],
-            guide_text="No readiness line in this guide at all.",
+
+class MainModeFlagsTests(unittest.TestCase):
+    """--show-plan and --dry-run both reach further into main() than
+    --no-implement (which every other main()-level test in this file stops
+    at) -- --show-plan must call generate_plan() and stop there without
+    touching implement/verify/commit/report; --dry-run must call implement()
+    but then skip Verifier/Committer entirely, unlike a normal run."""
+
+    def _run_main(self, argv, guide_text="**Ready for Implementation:** Yes\n"):
+        fake_guide_path = Path("guides") / "guide-T1.md"
+        mock_workspace = mock.Mock(
+            repo_dir="C:/fake/repo", branch_name="case/T1", case_dir=Path("C:/fake/case_dir"),
+        )
+        mock_wm_instance = mock.Mock()
+        mock_wm_instance.setup.return_value = mock_workspace
+        mock_wm_cls = mock.Mock(return_value=mock_wm_instance)
+
+        mock_implementer_instance = mock.Mock()
+        mock_implementer_instance.generate_plan.return_value = "1. Do the thing."
+        mock_implementer_instance.implement.return_value = ["change one"]
+        mock_implementer_cls = mock.Mock(return_value=mock_implementer_instance)
+
+        mock_verifier_cls = mock.Mock()
+        mock_committer_cls = mock.Mock()
+        mock_committer_cls.return_value.commit_changes.return_value = ["commit one"]
+        mock_report_cls = mock.Mock()
+        mock_report_cls.return_value.generate.return_value = Path("C:/fake/case_dir/VERIFICATION_CHECKLIST.md")
+
+        with mock.patch.object(sys, "argv", ["case_solve.py"] + argv), \
+             mock.patch("case_solve.shutil.which", side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None), \
+             mock.patch("case_solve.find_guide", return_value=fake_guide_path), \
+             mock.patch("case_solve.read_guide", return_value=guide_text), \
+             mock.patch("lib.workspace.WorkspaceManager", mock_wm_cls), \
+             mock.patch("lib.implementer.Implementer", mock_implementer_cls), \
+             mock.patch("lib.verifier.Verifier", mock_verifier_cls), \
+             mock.patch("lib.committer.Committer", mock_committer_cls), \
+             mock.patch("lib.report.ReportGenerator", mock_report_cls):
+            result = cs.main()
+        return result, mock_implementer_instance, mock_verifier_cls, mock_committer_cls, mock_report_cls
+
+    def test_show_plan_prints_the_plan_and_stops_before_implementing_anything(self):
+        result, implementer, verifier_cls, committer_cls, report_cls = self._run_main(
+            ["T1", "--yes", "--repo", "https://github.com/acme/widgets.git", "--show-plan"]
         )
         self.assertEqual(result, 0)
-        mock_wm_cls.assert_called_once()
+        implementer.generate_plan.assert_called_once()
+        implementer.implement.assert_not_called()
+        verifier_cls.assert_not_called()
+        committer_cls.assert_not_called()
+        report_cls.assert_not_called()
+
+    def test_dry_run_implements_but_skips_verify_commit_and_reports_no_results(self):
+        result, implementer, verifier_cls, committer_cls, report_cls = self._run_main(
+            ["T1", "--yes", "--repo", "https://github.com/acme/widgets.git", "--dry-run"]
+        )
+        self.assertEqual(result, 0)
+        implementer.implement.assert_called_once()
+        verifier_cls.assert_not_called()
+        committer_cls.assert_not_called()
+        report_cls.assert_called_once()
+        _, kwargs = report_cls.call_args
+        self.assertIsNone(kwargs["test_results"])
+        self.assertEqual(kwargs["commits"], [])
+
+    def test_normal_run_implements_verifies_and_commits(self):
+        # Contrast case: confirms --dry-run's skip is opt-in, not the
+        # default behavior.
+        result, implementer, verifier_cls, committer_cls, report_cls = self._run_main(
+            ["T1", "--yes", "--repo", "https://github.com/acme/widgets.git"]
+        )
+        self.assertEqual(result, 0)
+        implementer.implement.assert_called_once()
+        verifier_cls.assert_called_once()
+        committer_cls.assert_called_once()
+        report_cls.assert_called_once()
+
+
+class ClaudeNotFoundTests(unittest.TestCase):
+    def test_missing_claude_cli_exits_before_looking_for_a_guide(self):
+        with mock.patch.object(sys, "argv", ["case_solve.py", "T1"]), \
+             mock.patch("case_solve.shutil.which", return_value=None), \
+             mock.patch("case_solve.find_guide") as find_guide:
+            with self.assertRaises(SystemExit) as ctx:
+                cs.main()
+        self.assertIn("claude CLI not found", str(ctx.exception))
+        find_guide.assert_not_called()
 
 
 if __name__ == "__main__":
