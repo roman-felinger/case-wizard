@@ -19,7 +19,6 @@ python -m venv .venv
 source .venv/bin/activate       # Mac/Linux
 
 pip install -r requirements.txt
-python -m playwright install chromium   # one-time, ~115 MB -- used for CRM scraping
 ```
 
 ## Requirements
@@ -63,22 +62,23 @@ each stage's script in a subprocess, in order, the same as running them by hand.
 
 ### 1. case-brief — gather context
 
-Scrapes the case from CRM (browser automation, `--skip-browser` to disable) and
-resolves any Azure DevOps PR/branch links already pasted into the case
-(`--skip-ado` to disable). No config file — org/CRM/Chrome-profile are fixed
-constants (this tool only ever talks to one org and one CRM).
+Looks up the case from CRM via the Dataverse Web API, authenticated with OAuth
+(Entra ID) device-code sign-in (`--skip-crm` to disable), and resolves any Azure
+DevOps PR/branch links already pasted into the case (`--skip-ado` to disable). No
+config file — org/CRM/OAuth client are fixed constants (this tool only ever talks
+to one org and one CRM).
 
 ```bash
-python case-brief/case_brief.py --demo                 # fake data, fastest smoke test
-python case-brief/case_brief.py T2611845                # real run
-python case-brief/case_brief.py T2611845 --skip-browser # ADO only, no Chrome
+python case-brief/case_brief.py --demo             # fake data, fastest smoke test
+python case-brief/case_brief.py T2611845            # real run
+python case-brief/case_brief.py T2611845 --skip-crm # ADO only, no CRM sign-in
 python case-brief/case_brief.py -h
 ```
 
-The first real run opens a visible sign-in window against a dedicated Chrome profile
-(`case-brief/chrome-automation-profile/`, gitignored — not your regular browser,
-since modern browsers block external tools from reading their session cookies).
-Later runs reuse that session headlessly as long as it's still valid.
+The first real run prints a one-time device code and a URL — open it in any browser
+and sign in with your normal CRM account. Later runs are silent: the token is
+cached (`case-brief/.token_cache/`, gitignored) and silently refreshed. No admin
+app-registration step is needed (see `CLAUDE.md`'s Dataverse API section for why).
 
 Output: `case-brief/case-briefs/case-<number>.md`
 
@@ -155,7 +155,7 @@ python run_tests.py brief guide  # just these
 
 ## Status
 
-- **Brief:** CRM + ADO working, 120 tests (`case-brief/tests/`)
+- **Brief:** CRM (Dataverse Web API, OAuth) + ADO working, 123 tests (`case-brief/tests/`)
 - **Guide:** stable, 84 tests (`case-guide/tests/`)
 - **Solve:** MVP — clone/branch/dependency-install verified, 141 tests
   (`case-solve/tests/`); a real end-to-end Claude implementation run against a live
@@ -171,15 +171,14 @@ something's not working.
 case-guide/case-solve fail with a real `claude` error rather than "not found", log in
 again — a session can expire.
 
-**CRM shows not logged in / case-brief can't read the case.** Run
-`python case-brief/case_brief.py <case-number>` — a browser window opens pointed at
-CRM (later runs may skip the window and reuse the session headlessly if it's still
-valid). Log in if prompted; the session persists in
-`case-brief/chrome-automation-profile/`, so this is normally a one-time thing.
-If the window flashes and closes instantly, a previous run left the profile locked —
-delete `case-brief/chrome-automation-profile/` and try again. Pass
-`--keep-browser-open` if you don't want the window to auto-close when case-brief
-finishes.
+**CRM sign-in fails / case-brief can't read the case.** Run
+`python case-brief/case_brief.py <case-number>` — the first time, it prints a
+device code and a URL; open the URL in any browser and sign in with your normal CRM
+account. Later runs reuse the cached token silently. If sign-in itself fails with an
+AADSTS error mentioning consent or Conditional Access, that needs an Entra ID admin
+to approve app access for this tenant — see `CLAUDE.md`'s Dataverse API section. To
+force a fresh sign-in (e.g. after a permissions change), delete
+`case-brief/.token_cache/`.
 
 **Azure DevOps errors (case-brief, case-guide).** Both are hardcoded to one org
 (`https://dev.azure.com/artexis`; case-guide still takes `--org-url` for a one-off

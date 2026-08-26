@@ -1,2 +1,2 @@
 requests>=2.31
-playwright>=1.45
+msal>=1.28

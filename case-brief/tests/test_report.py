@@ -35,7 +35,7 @@ class BuildMarkdownMinimalInputTests(unittest.TestCase):
     def test_minimal_input_does_not_crash_and_notes_every_empty_section(self):
         md = report.build_markdown("T1", [], [], [])
         self.assertIn("# Case T1", md)
-        self.assertIn("No CRM case tab found open", md)
+        self.assertIn("No CRM case data", md)
         self.assertIn("No matching branches found", md)
         self.assertIn("No matching pull requests found", md)
 

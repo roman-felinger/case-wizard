@@ -99,7 +99,7 @@ def build_markdown(case_number, crm_results, branches, pull_requests,
     ado_rendered = False  # the Azure DevOps section is whole-run, not per-case -- render it once
 
     if not crm_results:
-        lines.append("_No CRM case tab found open in the automation Chrome window._")
+        lines.append("_No CRM case data (CRM lookup was skipped or returned nothing)._")
     for c in crm_results:
         if c.get("error"):
             lines.append(f"- ⚠️ {c['error']} ({c.get('url')})")

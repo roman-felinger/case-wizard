@@ -1,13 +1,15 @@
-"""Reads a Dynamics 365 CRM case using an already-open, already-logged-in
-browser tab -- no OAuth, no app registration.
+"""Reads a Dynamics 365 CRM case via the Dataverse Web API, given a `page`
+object exposing exactly `.url` and `.evaluate(js, arg)` -- in production
+that's lib/dataverse_page.py's DataverseApiPage, backed by a real OAuth
+(Entra ID) access token (see lib/dataverse_auth.py; no admin app
+registration needed -- see CLAUDE.md's Dataverse API section). Deliberately
+written against that narrow, transport-agnostic interface rather than a
+concrete client, which is what let auth swap from an earlier
+browser-cookie-riding implementation to OAuth without changing a line of
+this file -- see CLAUDE.md's "Removed in the 2026-08-26 Dataverse API
+migration" section for that history.
 
-Trick: the Dataverse Web API lives on the *same origin* as the CRM UI itself.
-A same-origin fetch with credentials included rides on the page's own session
-cookie, the same way the CRM UI's own JavaScript calls that API internally.
-
-Always looked up by ticket number (lookup_by_ticket): works from ANY open,
-logged-in CRM tab -- you don't need to navigate to the specific case
-yourself, just have CRM open to something.
+Always looked up by ticket number (lookup_by_ticket).
 
 Scrapes everything on the case, not a curated subset:
   - Every populated attribute on the incident record itself (no $select at
@@ -271,8 +273,7 @@ def _to_result(case, origin, tab_url, labels=None, memo_fields=None):
 
     return {
         "id": incident_id,
-        # Deep link into the CRM UI, so the brief has something clickable
-        # and the browser module can reopen this exact case next time.
+        # Deep link into the CRM UI, so the brief has something clickable.
         "url": f"{origin}/main.aspx?pagetype=entityrecord&etn=incident&id={incident_id}" if incident_id else tab_url,
         "title": case.get("title"),
         "ticket_number": case.get("ticketnumber"),

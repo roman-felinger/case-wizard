@@ -2,27 +2,27 @@
 """Compile a support case's context into one Markdown brief opened in VS Code.
 
 Default flow needs no admin-approved app registration at all:
-  - CRM case: looked up directly via the CRM API by ticket number, using
-    ANY already-open, logged-in CRM tab as the auth bridge -- you don't need
-    to find/open the specific case yourself.
+  - CRM case: looked up directly via the Dataverse Web API by ticket number,
+    authenticated via OAuth (Entra ID) device-code sign-in -- the first run
+    opens an interactive sign-in prompt (a URL + a one-time code, no browser
+    automation profile), every run after that is silent (see
+    lib/dataverse_auth.py for why no admin app registration is needed here).
   - Azure DevOps: related branches and PRs, via the real REST API using a
     self-service PAT (no admin approval needed for that one). Resolved
     directly from any ADO link already found in the CRM case (fast -- one
     API call each). There is no broader org-wide search -- see
     lib/ado_api.py's module docstring for why.
 
-The org URL, PAT env var, CRM ticket field, CRM host pattern, output
-directory, and Chrome profile/port are all fixed (see the constants below)
--- this tool only ever talks to one org, one CRM, and its own dedicated
-Chrome profile, so making any of that configurable added surface nobody
-ever actually needed to touch. There is no config.json at all -- every
-setting here is either a CLI flag or a fixed constant. Run with -h to see
-the flags.
+The org URL, PAT env var, CRM ticket field, and output directory are all
+fixed (see the constants below) -- this tool only ever talks to one org and
+one CRM, so making any of that configurable added surface nobody ever
+actually needed to touch. There is no config.json at all -- every setting
+here is either a CLI flag or a fixed constant. Run with -h to see the flags.
 
 Examples:
     python case_brief.py T2611845                  # look up this case directly
     python case_brief.py T2611845 --skip-ado
-    python case_brief.py --demo                    # no browser/APIs, sample data
+    python case_brief.py --demo                    # no API calls, sample data
 """
 import argparse
 import os
@@ -35,28 +35,19 @@ from shared.console import enable_utf8_console
 
 enable_utf8_console()  # this script prints Unicode; see shared/console.py
 
-from lib import ado_api, browser, crm_scrape, report
+from lib import ado_api, crm_scrape, dataverse_auth, report
+from lib.dataverse_page import DataverseApiPage
 from lib.progress import progress, progress_success, progress_error
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# This tool only ever talks to one Dynamics 365 org via its own dedicated
-# Chrome automation profile, so none of this actually varies -- not worth a
-# config file or CLI flag. (Azure DevOps's own org URL/PAT env var
-# equivalents live in lib/ado_api.py.) If chrome.exe isn't found
-# automatically, set CHROME_CFG["executable"] below to its full path.
+# This tool only ever talks to one Dynamics 365 org, so none of this
+# actually varies -- not worth a config file or CLI flag. (Azure DevOps's
+# own org URL/PAT env var equivalents live in lib/ado_api.py.)
 TICKET_FIELD = "ticketnumber"
-CRM_HOST_CONTAINS = ["dynamics.com"]
+# Also the Dataverse OAuth resource identifier (see lib/dataverse_auth.py).
+CRM_ORIGIN = "https://artex-crm.crm4.dynamics.com"
 OUTPUT_DIR = "./case-briefs"
-CHROME_CFG = {
-    # Anchored to this script's own directory, not the process's cwd -- a run
-    # launched from outside case-brief/ (e.g. the repo root) would otherwise
-    # create an untracked, ungitignored Chrome profile wherever cwd happened
-    # to be instead of the gitignored case-brief/chrome-automation-profile/.
-    "profile_dir": os.path.join(HERE, "chrome-automation-profile"),
-    "debug_port": 9222,
-    "executable": None,
-}
 
 
 def _collect_reference_text(crm_results):
@@ -181,97 +172,22 @@ def demo_data(case_number):
     return crm_results, branches, pull_requests
 
 
-def _remember_crm_url(crm_results):
-    """Caches this run's CRM case URL so the next cold Chrome launch (or the
-    next headless staleness check below) has something to reopen/probe
-    instead of starting from nothing."""
-    last_urls = browser.load_last_urls()
-    if crm_results and not crm_results[0].get("error"):
-        last_urls["crm"] = crm_results[0]["url"]
-    if last_urls:
-        browser.save_last_urls(last_urls)
+def run_crm_lookup(case_number):
+    """CRM lookup via the real Dataverse Web API over an OAuth (Entra ID)
+    access token (see lib/dataverse_auth.py). Reuses crm_scrape.py
+    completely unchanged: the only thing new is DataverseApiPage, which
+    answers crm_scrape's `page` interface (`.url` / `.evaluate(js, arg)`)
+    over `requests` + the token instead of an in-page browser fetch.
 
-
-def _try_headless_scrape(cached_crm_url, case_number):
-    """Proactively checks whether the CRM session is still fresh using a
-    headless browser on the SAME profile -- reusing cookies left over from a
-    previous headed sign-in -- and if so, does the whole ticket lookup
-    headless, no window ever shown.
-
-    Any authenticated CRM tab is a valid auth bridge for the API lookup, so
-    landing on the cached case URL is enough -- we don't need it to still be
-    *that* case, just that origin. Returns the crm_results list on success,
-    or None if the session's stale/missing/anything went wrong -- callers
-    should treat None as "fall back to the headed sign-in flow", not as an
-    error.
+    Deliberately does NOT retry or degrade on failure -- an expired/blocked
+    token or a permissions error needs to surface as a clear error (see
+    lib/dataverse_auth.py's DataverseAuthError and CLAUDE.md's Dataverse
+    API section for what to do about it).
     """
-    try:
-        pw, context = browser.launch_headless_context(CHROME_CFG)
-    except Exception:
-        return None
-    try:
-        page = context.new_page()
-        try:
-            page.goto(cached_crm_url, wait_until="commit", timeout=15000)
-        except Exception:
-            return None
-        if not crm_scrape.is_authenticated(page):
-            return None
-        print("CRM session still valid -- looking up the case headlessly (no sign-in window needed)...")
-        return [crm_scrape.lookup_by_ticket(page, case_number, TICKET_FIELD)]
-    except Exception:
-        return None
-    finally:
-        browser.close_headless_context(pw, context)
-
-
-def run_browser_scrape(case_number, keep_browser_open=False):
-    # Proactive staleness check: only worth attempting when no headed instance
-    # already has the profile open (it would just fail to launch against a
-    # locked profile dir) and there's a cached CRM URL to probe. If there's no
-    # cached URL yet (e.g. first run ever), there's nothing to probe -- go
-    # straight to the headed flow below, same as always.
-    if not browser.is_chrome_running(CHROME_CFG):
-        cached_crm_url = browser.load_last_urls().get("crm")
-        if cached_crm_url:
-            crm_results = _try_headless_scrape(cached_crm_url, case_number)
-            if crm_results is not None:
-                _remember_crm_url(crm_results)
-                return crm_results
-            print("CRM session looks stale (or the check failed) -- opening the sign-in window instead...")
-
-    port, _ = browser.ensure_chrome(CHROME_CFG)
-
-    def ready(pages):
-        return any(crm_scrape.is_authenticated(t) for t in crm_scrape.find_authenticated_tabs(pages, CRM_HOST_CONTAINS))
-
-    browser.wait_until_ready(
-        port, ready,
-        "Waiting for you to sign into CRM in the automation Chrome window (any page there is fine)...",
-    )
-
-    pw, pages = browser.get_pages(port)
-    try:
-        auth_tabs = crm_scrape.find_authenticated_tabs(pages, CRM_HOST_CONTAINS)
-        auth_tab = next((t for t in auth_tabs if crm_scrape.is_authenticated(t)), None)
-        if not auth_tab:
-            crm_results = [{"error": "No authenticated CRM tab found.", "url": ""}]
-        else:
-            print(f"Looking up case {case_number} via the CRM API (using an already-open CRM tab for auth)...")
-            crm_results = [crm_scrape.lookup_by_ticket(auth_tab, case_number, TICKET_FIELD)]
-    finally:
-        browser.close(pw)
-
-    # Remember this URL so the next cold launch (e.g. after you closed the
-    # window), or the next headless staleness check above, has it to reopen
-    # or probe instead of starting from nothing.
-    _remember_crm_url(crm_results)
-
-    if not keep_browser_open:
-        print("Closing the automation Chrome window...")
-        browser.close_chrome_window(CHROME_CFG)
-
-    return crm_results
+    token = dataverse_auth.get_access_token()
+    page = DataverseApiPage(CRM_ORIGIN, token)
+    print(f"Looking up case {case_number} via the Dataverse Web API (OAuth)...")
+    return [crm_scrape.lookup_by_ticket(page, case_number, TICKET_FIELD)]
 
 
 def build_parser():
@@ -280,16 +196,12 @@ def build_parser():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("case_number", nargs="?", help="CRM ticket number (required unless --demo or --skip-browser is used)")
+    parser.add_argument("case_number", nargs="?", help="CRM ticket number (required unless --demo or --skip-crm is used)")
 
     modes = parser.add_argument_group("modes")
-    modes.add_argument("--demo", action="store_true", help="Use sample data, no network/browser/API calls")
+    modes.add_argument("--demo", action="store_true", help="Use sample data, no network/API calls")
     modes.add_argument("--skip-ado", action="store_true", help="Don't search Azure DevOps")
-    modes.add_argument("--skip-browser", action="store_true", help="Skip CRM browser scraping entirely (Azure DevOps only)")
-    modes.add_argument(
-        "--keep-browser-open", action="store_true",
-        help="Don't close the automation Chrome window when done (default: close it).",
-    )
+    modes.add_argument("--skip-crm", action="store_true", help="Skip the CRM lookup entirely (Azure DevOps only)")
 
     return parser
 
@@ -298,12 +210,11 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
-    # case_number is only optional for --demo (fake data) and --skip-browser
-    # (ADO-only, nothing to look up in CRM) -- the real browser-scrape path
-    # always needs a ticket to look up now that there's no more auto-detect
-    # from an already-open case tab.
-    if not args.demo and not args.skip_browser and not args.case_number:
-        parser.error("case_number is required (pass a ticket number, or use --demo / --skip-browser)")
+    # case_number is only optional for --demo (fake data) and --skip-crm
+    # (ADO-only, nothing to look up in CRM) -- the real lookup always needs
+    # a ticket number.
+    if not args.demo and not args.skip_crm and not args.case_number:
+        parser.error("case_number is required (pass a ticket number, or use --demo / --skip-crm)")
 
     crm_results, branches, pull_requests, ado_error, ado_note = [], [], [], None, None
 
@@ -313,12 +224,9 @@ def main():
             crm_results, branches, pull_requests = demo_data(args.case_number)
             progress_success("Demo data loaded")
         else:
-            if not args.skip_browser:
-                progress("Connecting to automation Chrome window...", status="running")
-                crm_results = run_browser_scrape(
-                    case_number=args.case_number,
-                    keep_browser_open=args.keep_browser_open,
-                )
+            if not args.skip_crm:
+                progress("Signing in to Dataverse (OAuth)...", status="running")
+                crm_results = run_crm_lookup(args.case_number)
                 progress_success("CRM data extracted", f"Found {len(crm_results)} cases")
 
             if not args.skip_ado:

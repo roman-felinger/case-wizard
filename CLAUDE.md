@@ -12,9 +12,9 @@ design-rationale notes.
 ```
 .venv\Scripts\Activate.ps1   # from repo root, on Windows -- has everything all three stages need
 
-python case-brief/case_brief.py --demo        # fake data, no browser/API calls -- fastest smoke test
-python case-brief/case_brief.py T2611845      # real run: CRM lookup + ADO direct-reference resolution
-python case-brief/case_brief.py --skip-browser # ADO-only, no Chrome
+python case-brief/case_brief.py --demo        # fake data, no API calls -- fastest smoke test
+python case-brief/case_brief.py T2611845      # real run: CRM lookup (OAuth) + ADO direct-reference resolution
+python case-brief/case_brief.py --skip-crm    # ADO-only, no CRM sign-in
 
 python case-guide/case_guide.py T2611845      # needs a brief already on disk, and the claude CLI on PATH
 python case-guide/case_guide.py 12345         # smoke test: reads the checked-in demo brief
@@ -28,7 +28,7 @@ python run_tests.py                              # all three stages' test suites
 python -m unittest discover -s tests -v           # from any one stage's own directory, or repo root for case_wizard.py's own tests
 ```
 
-Test counts: case-brief 120, case-guide 84, case-solve 141, root (`case_wizard.py`) 29
+Test counts: case-brief 123, case-guide 84, case-solve 141, root (`case_wizard.py`) 29
 — all mocked, no network. Deliberately not exhaustive over every CLI flag or every
 low-risk rendering/plumbing branch; those are easily eyeballed with `--demo`-style
 manual runs. What no test suite here can cover: a real `claude` call, a live Azure
@@ -57,18 +57,24 @@ dependency any stage's actual job needs.
 
 Two independent data sources, merged into one Markdown report:
 
-**CRM (`lib/crm_scrape.py`, default path: browser scraping).** Always by ticket
+**CRM (`lib/crm_scrape.py`, over the real Dataverse Web API).** Always by ticket
 number (no auto-detect from an already-open case tab — cut for being a confusing
-second mode). `case_brief.py::run_browser_scrape` first tries a headless, no-window
-pass: if `.last_urls.json` has a CRM URL from a previous run, it launches headless
-against the same profile dir (reusing whatever cookies a previous headed sign-in
-left there) and checks `crm_scrape.is_authenticated`. Anything else (no cached URL,
-expired session, launch failed) falls back to the original headed flow:
-`lib/browser.py` launches a dedicated, visible-but-minimized Chrome profile
-(`chrome-automation-profile/`, gitignored) via CDP on a fixed debug port, distinct
-from your normal browsing profile — no app registration needed either way. The
-headed window is closed by the script itself at the end of any run that opened one;
-the last-used CRM URL is always cached to `.last_urls.json`.
+second mode). `crm_scrape.py` was never HTML-scraping the CRM UI — it makes real
+Dataverse Web API calls (`/api/data/v9.2/incidents`, `/annotations`,
+`/activitypointers`, `EntityDefinitions`) and always has. What changed 2026-08-26 is
+*how* those calls get authenticated: OAuth (Entra ID) via MSAL device-code sign-in
+(`lib/dataverse_auth.py`), not a Playwright-driven Chrome tab riding the CRM
+session's own cookie. `case_brief.py::run_crm_lookup` gets a token and wraps it in
+`DataverseApiPage` (`lib/dataverse_page.py`), which duck-types the two things
+`crm_scrape.py` actually uses off a `page` argument — `.url` and
+`.evaluate(js, arg)` — over `requests` + a Bearer token instead of an in-page
+browser fetch. That's the whole seam: `crm_scrape.py`, `report.py`, and their
+existing tests needed zero changes. Token cache (`case-brief/.token_cache/`,
+gitignored — holds a refresh token, a credential) makes every run after the first
+sign-in silent — no browser, no Chrome profile, nothing to keep logged in by hand.
+Does **not** retry or degrade on failure — an expired/blocked token or a permissions
+error surfaces as an explicit `DataverseAuthError`/HTTP error, not a silent partial
+result.
 
 Scrapes the whole case, not a curated subset — the incident record is fetched with
 no `$select` at all, so an org's own custom fields show up too, labeled via a
@@ -82,6 +88,36 @@ most of the time, so `report.build_markdown`'s `promoted_fields` param (default:
 `report.DEFAULT_PROMOTED_FIELDS`, fixed) pulls specific fields into their own
 subsection right after Description; everything else lands in an uncurated "Other CRM
 Fields" section at the bottom.
+
+**Dataverse API access investigation (2026-08-26).** Before replacing the browser
+scraper, verified end-to-end rather than assumed:
+1. **Auth mechanism**: device-code OAuth via MSAL, using a well-known Microsoft
+   first-party *public* client ID (`51f81489-12ee-4a9e-aaae-a2591f45987d` — a
+   native/desktop app type, no secret, already delegated `user_impersonation` access
+   to Dataverse in this tenant). **No Entra ID admin app registration was needed.**
+2. **Identity/permissions**: signed in as `rfelinger@artex-is.cz`
+   (tenant `2fb165ea-8dc4-4800-ace7-db202bb064e6`); `WhoAmI` returned 200; a live
+   `incidents` query returned real case data. Same user, same Dataverse security
+   role as the browser session already used — permissions don't vary by auth
+   transport, only by the underlying user/role, so this covers `annotations`/
+   `activitypointers`/`EntityDefinitions` too (same API, same role).
+3. **Table name confirmed, not assumed**: CRM cases are the `incident` entity
+   (`incidents` as an API set name), matching what `crm_scrape.py` already assumed.
+4. **Data parity**: `DataverseApiPage.evaluate` calls the exact same REST endpoints
+   with the exact same headers as `crm_scrape._FETCH_JS`'s old in-browser fetch,
+   returning the identical JSON shape — as the same user against the same
+   environment, output is structurally identical by construction, not just by
+   spot-check, and confirmed with a real end-to-end run against a live ticket.
+5. If a tenant *does* block the well-known client (Conditional Access / consent
+   policy), `get_access_token` raises `DataverseAuthError` with the AADSTS error
+   text rather than hanging or silently doing something else — that's the "admin
+   needs to do something" signal called for by this investigation, not encountered
+   here.
+
+Browser-based scraping (`lib/browser.py`, a Playwright-driven Chrome profile riding
+the CRM session's own cookie) was removed outright once this was proven, rather than
+kept as a second, parallel path — see "Removed in the 2026-08-26 Dataverse API
+migration" below.
 
 **Azure DevOps (`lib/ado_api.py`).** Real REST API via a self-service PAT
 (`AZDO_PAT` env var). `run_ado_lookup` flattens everything CRM scraping just found
@@ -98,9 +134,9 @@ to case-guide (see below), which is the thing that actually needs it; case-brief
 job is just the facts.
 
 **No config file.** Everything is a CLI flag or a fixed constant — org URL, PAT env
-var, CRM ticket field/host pattern, output directory, Chrome profile/port/executable
-— this tool only ever runs against one org, one CRM, and its own dedicated Chrome
-profile, so a config.json would have had nothing left worth putting in it.
+var, CRM ticket field, output directory, the Dataverse OAuth client ID/authority/
+token-cache path — this tool only ever runs against one org and one CRM, so a
+config.json would have had nothing left worth putting in it.
 
 `lib/report.py` is the only place that renders the final Markdown and writes it —
 CRM/ADO results are plain dicts/lists by the time they reach it.
@@ -256,15 +292,48 @@ same conclusion from scratch.
   TROUBLESHOOT.md) collapsed into this file and the root README.md.
 - CRM browser scraping (Playwright + a dedicated Chrome profile) was considered for
   replacement with a direct Dynamics 365 Web API call, which would have dropped the
-  heaviest dependency in the project. Not pursued — no API-access path is currently
-  available for this CRM instance, so browser scraping stays the only option.
+  heaviest dependency in the project. Not pursued at the time — no API-access path
+  was known to be available for this CRM instance, so browser scraping stayed the
+  only option.
+  **Superseded 2026-08-26**: re-investigated and found to work — see case-brief's
+  "Dataverse API access investigation" section above. `msal` (listed just above as
+  removed for being unused) is back in `requirements.txt`, now actually imported by
+  `lib/dataverse_auth.py`.
+
+## Removed in the 2026-08-26 Dataverse API migration
+
+Once OAuth access was proven end-to-end (see case-brief's "Dataverse API access
+investigation"), the browser-based CRM auth it replaced was deleted outright rather
+than kept as a second, parallel path:
+
+- `case-brief/lib/browser.py` and `case-brief/tests/test_browser.py` — the
+  Playwright/CDP Chrome-automation-profile machinery (`ensure_chrome`,
+  `launch_headless_context`, `wait_until_ready`, `close_chrome_window`, the
+  `.last_urls.json` cache, ...).
+- `case_brief.py`'s `run_browser_scrape`/`_try_headless_scrape`/`_remember_crm_url`,
+  the `CHROME_CFG`/`CRM_HOST_CONTAINS` constants, and the `--keep-browser-open` flag.
+  `--skip-browser` was renamed `--skip-crm` (still ADO-only, just no longer
+  browser-specific wording now that CRM auth never opens a browser).
+  There is no `--api` flag — Dataverse OAuth is simply how CRM auth works now, not
+  an opt-in alternative to something else.
+- The `playwright` dependency and the `python -m playwright install chromium`
+  setup step, and `case-brief/chrome-automation-profile/`'s `.gitignore` entry.
+- `crm_scrape.py`, `report.py`, and everything downstream (`case_guide.py`'s brief
+  parsing) needed **no changes** — see the data-parity point in the investigation
+  notes for why.
 
 ## Future ideas
 
 - **case-brief:** verify the "get everything" CRM scrape (full-record fetch, no
   `$select`; `EntityDefinitions` metadata labeling; Notes/Activity Timeline calls)
   and direct ADO reference resolution against real, live cases — both are currently
-  only unit-tested against faked responses.
+  only unit-tested against faked responses. A live OAuth run against `incidents`
+  is confirmed (see the Dataverse API access investigation); `annotations`/
+  `activitypointers`/`EntityDefinitions` haven't specifically been exercised live
+  yet, ideally against a case with a memo-type/lookup/option-set field populated.
+  Make sure AZDO content is actually reachable and that direct-reference links
+  found in the case are investigated properly (not just detected). Make sure the
+  CRM's internal description field is retrieved and displayed properly in the brief.
 - **case-guide:** verify the customer↔project fuzzy match
   (`repo_suggest._fuzzy_score`/`best_fuzzy_match`) against how your org's actual ADO
   projects are named vs. how CRM customer names look — the threshold/lead values may

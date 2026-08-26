@@ -4,9 +4,9 @@ direct-reference resolution and _collect_reference_text's text-flattening.
 Deliberately not exhaustive over every CLI flag or every branch of
 build_parser/main -- those are low-risk plumbing, easily eyeballed with
 `--demo`-style manual runs. There is no config file at all here (org URL,
-CRM ticket field/host pattern, Chrome profile -- all fixed constants; see
-case_brief.py's module docstring), so there's no config-merge precedence
-left to test the way case-guide/case-solve still have.
+CRM ticket field, Dataverse OAuth client/authority -- all fixed constants;
+see case_brief.py's module docstring), so there's no config-merge
+precedence left to test the way case-guide/case-solve still have.
 
 Run with: python -m unittest discover -s tests -v   (from case-brief/)
       or: python -m pytest tests                     (if pytest is installed)
