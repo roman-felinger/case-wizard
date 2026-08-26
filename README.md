@@ -196,9 +196,9 @@ python run_tests.py brief guide  # just these
 
 ## Status
 
-- **Brief:** CRM (Dataverse Web API, OAuth) + ADO working, 169 tests (`case-brief/tests/`)
-- **Guide:** stable, 90 tests (`case-guide/tests/`)
-- **Solve:** MVP — clone/branch/dependency-install verified, 141 tests
+- **Brief:** CRM (Dataverse Web API, OAuth) + ADO working, 196 tests (`case-brief/tests/`)
+- **Guide:** stable, 110 tests (`case-guide/tests/`)
+- **Solve:** MVP — clone/branch/dependency-install verified, 157 tests
   (`case-solve/tests/`); a real end-to-end Claude implementation run against a live
   repo is the main thing left to exercise
 - **Getter:** working, verified against live CRM data; 56 tests (`case-getter/tests/`)
