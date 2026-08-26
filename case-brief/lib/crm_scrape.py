@@ -26,6 +26,7 @@ Scrapes everything on the case, not a curated subset:
     PRs/branches a support engineer attached directly, not just pasted into
     free text) -- see RELATED_LINKS_NAV_PROPERTY below.
 """
+import base64
 import html
 import re
 
@@ -54,7 +55,7 @@ _FORMATTED_SUFFIX = "@OData.Community.Display.V1.FormattedValue"
 # _to_result) -- excluded from "all_fields" so they don't show up twice.
 _SUMMARY_FIELDS = {
     "incidentid", "title", "ticketnumber", "prioritycode", "statuscode",
-    "createdon", "description", "customerid", "ownerid",
+    "createdon", "modifiedon", "description", "customerid", "ownerid",
 }
 
 # Pure Dataverse/DB plumbing that's never meaningful case content -- kept
@@ -88,6 +89,19 @@ _METADATA_CACHE = {}
 NOTES_TOP = 100
 ACTIVITIES_TOP = 50
 
+# A note's attached file (Dataverse's `annotation.documentbody`, base64) is
+# only actually fetched/inlined into the brief when it's both small and a
+# type the brief can do something useful with -- everything else stays a
+# named-but-not-fetched reference, same as before this existed, so one huge
+# log dump or a handful of PDFs/zips attached to a case doesn't balloon
+# either the API traffic or the brief itself. See _fetch_inlinable_attachments.
+ATTACHMENT_MAX_FETCH_BYTES = 3_000_000  # ~3 MB -- comfortably covers a screenshot or a log
+ATTACHMENT_TEXT_MAX_CHARS = 20_000      # inlined text is read by a person *and* fed into
+                                         # case-guide's LLM prompt -- capped well below the
+                                         # fetch cap itself, which just bounds the download
+_INLINABLE_TEXT_MIME_PREFIXES = ("text/", "application/json", "application/xml")
+_INLINABLE_IMAGE_MIME_PREFIXES = ("image/",)
+
 # The incident form's "Dev" tab "Related links" grid (e.g. a linked Azure
 # DevOps PR/branch) -- a plain custom entity/relationship, not documented or
 # discoverable from the incident record itself. Schema found via a live
@@ -98,6 +112,25 @@ ACTIVITIES_TOP = 50
 # sidesteps ever needing art_relatedlinks' entity-set name or its lookup
 # attribute back to incident, only this relationship's navigation property name.
 RELATED_LINKS_NAV_PROPERTY = "art_relatedlinks_Incident_Incident"
+
+# The org's model-driven Customer Service app id -- included in the case
+# record's own deep link (see _to_result) so it opens directly in that app
+# instead of Dynamics falling back to a default (or prompting to pick one).
+CRM_APP_ID = "a192020e-f294-ed11-aad1-000d3a2cc485"
+
+# Every new case is created owned by this team until a human picks it up --
+# confirmed live 2026-08-26 (see CLAUDE.md's case-getter section): a sample
+# of currently-active cases still owned by it were all genuinely unclaimed
+# ("Nový"/New status, no other owner ever assigned). Resolved to a GUID at
+# runtime by name (see _resolve_team_id) rather than hardcoded like
+# CRM_APP_ID above, so recreating the team in this org doesn't need a code
+# change here too.
+DEFAULT_UNASSIGNED_TEAM_NAME = "Helpdesk e-mail"
+
+# Cap on how many unassigned cases list_new_cases considers at once -- same
+# "signal a partial result, don't silently truncate" pattern as
+# NOTES_TOP/ACTIVITIES_TOP.
+NEW_CASES_TOP = 200
 
 
 def reset_metadata_cache():
@@ -221,6 +254,66 @@ def _extract_all_fields(record, labels, memo_fields):
     return fields
 
 
+def _is_inlinable_mimetype(mimetype):
+    mimetype = (mimetype or "").lower()
+    return mimetype.startswith(_INLINABLE_TEXT_MIME_PREFIXES + _INLINABLE_IMAGE_MIME_PREFIXES)
+
+
+def _fetch_inlinable_attachments(page, origin, notes):
+    """Fetches `documentbody` for whichever of `notes` are small,
+    inlinable-type file attachments (see ATTACHMENT_MAX_FETCH_BYTES/
+    _is_inlinable_mimetype) and fills in each qualifying note's
+    "attachment" key -- {"kind": "text", "content": ..., "truncated": bool}
+    or {"kind": "image", "bytes": <raw decoded bytes>}. Every other note's
+    "attachment" is left at get_notes' own default of None.
+
+    A second, separate request from get_notes' own query -- documentbody is
+    base64 file content, potentially large, and most notes aren't
+    attachments at all, so fetching it unconditionally for every one of up
+    to NOTES_TOP notes would mean downloading bytes nobody asked for.
+    Mutates `notes` in place; best-effort -- a failure here (or a body that
+    doesn't decode) still leaves every note's filename/size/mimetype intact
+    (already set by get_notes), just without the fetched content, same
+    "get everything, just less" degrade as get_attribute_metadata's own
+    failure mode.
+    """
+    candidates = {
+        n["id"]: n for n in notes
+        if n.get("id") and n.get("filename")
+        and (n.get("filesize") or 0) <= ATTACHMENT_MAX_FETCH_BYTES
+        and _is_inlinable_mimetype(n.get("mimetype"))
+    }
+    if not candidates:
+        return
+
+    id_filter = " or ".join(f"annotationid eq {annotation_id}" for annotation_id in candidates)
+    url = f"{origin}/api/data/v9.2/annotations?$select=annotationid,documentbody&$filter={id_filter}"
+    data, error = _fetch(page, url)
+    if error:
+        return
+
+    for row in data.get("value", []):
+        note = candidates.get(row.get("annotationid"))
+        body_b64 = row.get("documentbody")
+        if not note or not body_b64:
+            continue
+        try:
+            raw_bytes = base64.b64decode(body_b64)
+        except Exception:
+            continue  # malformed/unexpected encoding -- leave "attachment" at None
+
+        if (note.get("mimetype") or "").lower().startswith(_INLINABLE_IMAGE_MIME_PREFIXES):
+            note["attachment"] = {"kind": "image", "bytes": raw_bytes}
+        else:
+            text = raw_bytes.decode("utf-8", errors="replace")
+            truncated = len(text) > ATTACHMENT_TEXT_MAX_CHARS
+            note["attachment"] = {
+                "kind": "text",
+                "content": text[:ATTACHMENT_TEXT_MAX_CHARS] if truncated else text,
+                "truncated": truncated,
+            }
+
+
 def get_notes(page, origin, incident_id):
     """Notes (Dataverse's generic `annotation` entity) attached to the case
     -- shown on the case page's Notes/timeline, not part of the incident
@@ -228,12 +321,14 @@ def get_notes(page, origin, incident_id):
 
     Returns (notes, truncated, error). Capped at NOTES_TOP most recent;
     truncation is signaled rather than silently dropped, same pattern as
-    ado_api's max_prs.
+    ado_api's max_prs. Each note's "attachment" is filled in by
+    _fetch_inlinable_attachments for whichever attached files qualify (see
+    there) -- None for the rest, same as before this existed.
     """
     url = (
         f"{origin}/api/data/v9.2/annotations"
         f"?$filter=_objectid_value eq {incident_id}"
-        f"&$select=subject,notetext,createdon,filename,isdocument"
+        f"&$select=annotationid,subject,notetext,createdon,filename,isdocument,mimetype,filesize"
         f"&$orderby=createdon desc&$top={NOTES_TOP}"
     )
     data, error = _fetch(page, url)
@@ -242,11 +337,17 @@ def get_notes(page, origin, incident_id):
 
     raw = data.get("value", [])
     notes = [{
+        "id": n.get("annotationid"),
         "subject": n.get("subject"),
         "text": _strip_html(n.get("notetext")),
         "created_on": n.get("createdon"),
         "filename": n.get("filename") if n.get("isdocument") else None,
+        "mimetype": n.get("mimetype") if n.get("isdocument") else None,
+        "filesize": n.get("filesize") if n.get("isdocument") else None,
+        "attachment": None,
     } for n in raw]
+
+    _fetch_inlinable_attachments(page, origin, notes)
     return notes, len(raw) >= NOTES_TOP, None
 
 
@@ -308,6 +409,117 @@ def get_related_links(page, origin, incident_id):
     return links, None
 
 
+def _resolve_team_id(page, origin, team_name):
+    """GUID for a team, looked up by name. Returns (team_id, error) -- same
+    escaping as lookup_by_ticket's ticket-number filter, for the same
+    reason (a `'` in the name would otherwise break out of the OData string
+    literal)."""
+    escaped = team_name.replace("'", "''")
+    url = f"{origin}/api/data/v9.2/teams?$filter=name eq '{escaped}'&$select=teamid"
+    data, error = _fetch(page, url)
+    if error:
+        return None, error
+    values = data.get("value", [])
+    if not values:
+        return None, f"No team found named '{team_name}'."
+    return values[0]["teamid"], None
+
+
+def get_current_user_id(page):
+    """The signed-in user's own systemuserid, via the Web API's WhoAmI
+    action -- resolved from the page's own token rather than a parameter a
+    caller would otherwise have to already know. Used by list_new_cases to
+    also surface cases already owned by whoever is running the query.
+    Returns (user_id, error)."""
+    origin = re.match(r"(https?://[^/]+)", page.url).group(1)
+    data, error = _fetch(page, f"{origin}/api/data/v9.2/WhoAmI")
+    if error:
+        return None, error
+    user_id = data.get("UserId")
+    if not user_id:
+        return None, "WhoAmI response had no UserId."
+    return user_id, None
+
+
+def list_new_cases(page, team_name=DEFAULT_UNASSIGNED_TEAM_NAME):
+    """Every currently-active case that's either still owned by `team_name`
+    (the CRM's default queue every new case lands in -- i.e. nobody has
+    picked it up yet) or already owned by whoever is signed in (`page`'s
+    own token, resolved via get_current_user_id) -- work that's unclaimed,
+    or already yours. Used by case-getter (../../case-getter/case_getter.py)
+    to find work; case-brief itself never calls this (it only ever looks up
+    one case by ticket number).
+
+    "Accessible to me" needs no extra filter here: the Dataverse Web API
+    call is already scoped to the signed-in user's own security role (see
+    CLAUDE.md's Dataverse API access investigation), so this only ever
+    returns what that user could already see in the CRM UI.
+
+    A WhoAmI failure degrades to the team-only filter (each case's
+    "owned_by_me" then just always False) rather than failing the whole
+    listing -- the same "get everything, just less" tradeoff
+    get_attribute_metadata already makes for a denied metadata call.
+
+    Deliberately a curated $select, unlike lookup_by_ticket's "get
+    everything" -- this is a triage list across possibly many cases, not
+    one case's full brief, so pulling every field for every row would be
+    slow and mostly unused.
+
+    Returns (cases, error, truncated). error means the whole query failed
+    to run (team not found, permissions, ...) -- cases is always [] in that
+    case. truncated means more than NEW_CASES_TOP cases matched (same
+    "signal a partial result" pattern as NOTES_TOP/ACTIVITIES_TOP).
+    """
+    origin = re.match(r"(https?://[^/]+)", page.url).group(1)
+    team_id, error = _resolve_team_id(page, origin, team_name)
+    if error:
+        return [], error, False
+
+    user_id, _ = get_current_user_id(page)  # best-effort -- see docstring
+    owner_filter = f"_owningteam_value eq {team_id}"
+    if user_id:
+        owner_filter = f"({owner_filter} or _owninguser_value eq {user_id})"
+
+    url = (
+        f"{origin}/api/data/v9.2/incidents"
+        # `_owninguser_value`, not the bare `owninguser` -- confirmed live
+        # (2026-08-26): $select-ing the bare attribute name for a lookup
+        # field silently returns something *other* than that field (either
+        # every field, or none of them, depending what else is in the
+        # $select list) rather than an error, so a wrong name here fails
+        # silently, not loudly. The underscore-prefixed nav-property-value
+        # form is Dataverse's own documented way to $select a lookup's raw
+        # value, and is what `_customerid_value` right next to it already
+        # relies on.
+        f"?$select=incidentid,ticketnumber,title,prioritycode,statuscode,createdon,modifiedon,_customerid_value,_owninguser_value"
+        f"&$filter=statecode eq 0 and {owner_filter}"
+        f"&$orderby=createdon desc&$top={NEW_CASES_TOP}"
+    )
+    data, error = _fetch(page, url)
+    if error:
+        return [], error, False
+
+    raw = data.get("value", [])
+    cases = [{
+        "id": c.get("incidentid"),
+        "ticket_number": c.get("ticketnumber"),
+        "title": c.get("title"),
+        "priority": c.get("prioritycode" + _FORMATTED_SUFFIX) or c.get("prioritycode"),
+        "status": c.get("statuscode" + _FORMATTED_SUFFIX) or c.get("statuscode"),
+        "created_on": c.get("createdon"),
+        # Cheap to select here (a plain scalar field, not a lookup -- no
+        # underscore-suffix gotcha like _owninguser_value above) and needed
+        # for case-getter's own staleness check (see _to_result's
+        # "modified_on" for the full explanation).
+        "modified_on": c.get("modifiedon"),
+        "customer": c.get("_customerid_value" + _FORMATTED_SUFFIX),
+        "owned_by_me": bool(user_id) and c.get("_owninguser_value") == user_id,
+        "url": (f"{origin}/main.aspx?appid={CRM_APP_ID}&forceUCI=1&pagetype=entityrecord&etn=incident&id={c.get('incidentid')}"
+                if c.get("incidentid") else None),
+    } for c in raw]
+    return cases, None, len(raw) >= NEW_CASES_TOP
+
+
 def _to_result(case, origin, tab_url, labels=None, memo_fields=None):
     labels = labels or {}
     memo_fields = memo_fields or set()
@@ -316,12 +528,22 @@ def _to_result(case, origin, tab_url, labels=None, memo_fields=None):
     return {
         "id": incident_id,
         # Deep link into the CRM UI, so the brief has something clickable.
-        "url": f"{origin}/main.aspx?pagetype=entityrecord&etn=incident&id={incident_id}" if incident_id else tab_url,
+        # appid+forceUCI pin it to the actual Customer Service app rather
+        # than Dynamics falling back to a default/prompting to pick one.
+        "url": (f"{origin}/main.aspx?appid={CRM_APP_ID}&forceUCI=1&pagetype=entityrecord&etn=incident&id={incident_id}"
+                if incident_id else tab_url),
         "title": case.get("title"),
         "ticket_number": case.get("ticketnumber"),
         "priority": case.get("prioritycode" + _FORMATTED_SUFFIX) or case.get("prioritycode"),
         "status": case.get("statuscode" + _FORMATTED_SUFFIX) or case.get("statuscode"),
         "created_on": case.get("createdon"),
+        # Dataverse's own last-modified timestamp -- report.py stamps this
+        # into a hidden marker in the rendered brief (see build_markdown),
+        # which case-getter reads back to detect a brief gone stale (see
+        # its own module docstring): if a later CRM listing shows a newer
+        # modifiedon than what's stamped here, the case changed since this
+        # brief was written.
+        "modified_on": case.get("modifiedon"),
         "description": _strip_html(case.get("description")),
         # Resolved from Dataverse's own display-name annotation for the
         # lookup, not a nested $expand -- this covers both account- and

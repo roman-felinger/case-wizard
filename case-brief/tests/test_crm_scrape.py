@@ -31,6 +31,7 @@ a real, logged-in CRM tab.
 Run with: python -m unittest discover -s tests -v   (from case-brief/)
       or: python -m pytest tests                     (if pytest is installed)
 """
+import base64
 import os
 import sys
 import unittest
@@ -152,6 +153,16 @@ class ToResultTests(unittest.TestCase):
         self.assertEqual(result["owner"], "Jane")
         self.assertIn("broke", result["description"])
         self.assertIn("abc-123", result["url"])
+
+    def test_case_link_is_pinned_to_the_customer_service_app(self):
+        # appid+forceUCI so the deep link opens directly in the app instead
+        # of Dynamics falling back to a default (or prompting to pick one).
+        case = {"incidentid": "abc-123"}
+        result = crm_scrape._to_result(case, "https://org.crm.dynamics.com", "https://tab-url")
+        self.assertEqual(
+            result["url"],
+            f"https://org.crm.dynamics.com/main.aspx?appid={crm_scrape.CRM_APP_ID}"
+            "&forceUCI=1&pagetype=entityrecord&etn=incident&id=abc-123")
 
     def test_falls_back_to_the_tab_url_when_no_incident_id(self):
         result = crm_scrape._to_result({}, "https://org.crm.dynamics.com", "https://tab-url")
@@ -305,6 +316,88 @@ class GetNotesTests(unittest.TestCase):
         self.assertEqual(error, "HTTP 500")
 
 
+class FetchInlinableAttachmentsTests(unittest.TestCase):
+    """get_notes' second, separate documentbody fetch (see
+    crm_scrape._fetch_inlinable_attachments) -- routed by URL substring
+    since it's a different query than the main notes fetch (see
+    FakePage.evaluate)."""
+
+    def _page(self, documentbody_result):
+        return FakePage("https://x", routes={
+            "notetext": {"value": [{
+                "annotationid": "a1", "subject": "s", "notetext": None, "createdon": "d",
+                "isdocument": True, "filename": "error.log", "mimetype": "text/plain", "filesize": 42,
+            }]},
+            "documentbody": documentbody_result,
+        })
+
+    def test_small_text_attachment_is_decoded_and_inlined(self):
+        body = base64.b64encode(b"boom at line 12").decode()
+        page = self._page({"value": [{"annotationid": "a1", "documentbody": body}]})
+        notes, _, _ = crm_scrape.get_notes(page, "https://x", "id1")
+        self.assertEqual(notes[0]["attachment"], {"kind": "text", "content": "boom at line 12", "truncated": False})
+
+    def test_long_text_attachment_is_truncated_and_flagged(self):
+        long_text = "x" * (crm_scrape.ATTACHMENT_TEXT_MAX_CHARS + 500)
+        body = base64.b64encode(long_text.encode()).decode()
+        page = self._page({"value": [{"annotationid": "a1", "documentbody": body}]})
+        notes, _, _ = crm_scrape.get_notes(page, "https://x", "id1")
+        self.assertEqual(len(notes[0]["attachment"]["content"]), crm_scrape.ATTACHMENT_TEXT_MAX_CHARS)
+        self.assertTrue(notes[0]["attachment"]["truncated"])
+
+    def test_image_attachment_keeps_raw_decoded_bytes(self):
+        page = FakePage("https://x", routes={
+            "notetext": {"value": [{
+                "annotationid": "a1", "subject": "s", "notetext": None, "createdon": "d",
+                "isdocument": True, "filename": "screenshot.png", "mimetype": "image/png", "filesize": 42,
+            }]},
+            "documentbody": {"value": [{"annotationid": "a1", "documentbody": base64.b64encode(b"\x89PNG...").decode()}]},
+        })
+        notes, _, _ = crm_scrape.get_notes(page, "https://x", "id1")
+        self.assertEqual(notes[0]["attachment"], {"kind": "image", "bytes": b"\x89PNG..."})
+
+    def test_oversized_attachment_is_never_fetched(self):
+        page = FakePage("https://x", routes={
+            "notetext": {"value": [{
+                "annotationid": "a1", "subject": "s", "notetext": None, "createdon": "d",
+                "isdocument": True, "filename": "dump.log", "mimetype": "text/plain",
+                "filesize": crm_scrape.ATTACHMENT_MAX_FETCH_BYTES + 1,
+            }]},
+            "documentbody": Exception("should never be called"),
+        })
+        notes, _, _ = crm_scrape.get_notes(page, "https://x", "id1")
+        self.assertIsNone(notes[0]["attachment"])
+        self.assertEqual(len(page.eval_calls), 1)  # only the main notes query ran
+
+    def test_non_inlinable_mimetype_is_named_but_not_fetched(self):
+        page = FakePage("https://x", routes={
+            "notetext": {"value": [{
+                "annotationid": "a1", "subject": "s", "notetext": None, "createdon": "d",
+                "isdocument": True, "filename": "report.pdf", "mimetype": "application/pdf", "filesize": 100,
+            }]},
+            "documentbody": Exception("should never be called"),
+        })
+        notes, _, _ = crm_scrape.get_notes(page, "https://x", "id1")
+        self.assertEqual(notes[0]["filename"], "report.pdf")
+        self.assertIsNone(notes[0]["attachment"])
+
+    def test_a_note_with_no_attachment_never_triggers_the_second_query(self):
+        page = FakePage("https://x", routes={
+            "notetext": {"value": [{"subject": "s", "notetext": "just text", "createdon": "d", "isdocument": False}]},
+            "documentbody": Exception("should never be called"),
+        })
+        notes, _, _ = crm_scrape.get_notes(page, "https://x", "id1")
+        self.assertIsNone(notes[0]["attachment"])
+        self.assertEqual(len(page.eval_calls), 1)
+
+    def test_documentbody_fetch_error_still_leaves_notes_usable(self):
+        page = self._page({"__error": "HTTP 503"})
+        notes, _, error = crm_scrape.get_notes(page, "https://x", "id1")
+        self.assertIsNone(error)  # the main notes fetch itself succeeded
+        self.assertIsNone(notes[0]["attachment"])
+        self.assertEqual(notes[0]["filename"], "error.log")
+
+
 class GetActivitiesTests(unittest.TestCase):
     def test_maps_activity_fields_preferring_formatted_status(self):
         page = FakePage("https://x", eval_result={"value": [
@@ -369,6 +462,117 @@ class GetRelatedLinksTests(unittest.TestCase):
         called_url = page.last_eval_arg
         self.assertIn("https://x/api/data/v9.2/incidents(id1)", called_url)
         self.assertIn(f"$expand={crm_scrape.RELATED_LINKS_NAV_PROPERTY}", called_url)
+
+
+class GetCurrentUserIdTests(unittest.TestCase):
+    def test_returns_the_userid_from_a_successful_whoami_call(self):
+        page = FakePage("https://x", eval_result={"UserId": "me-1"})
+        user_id, error = crm_scrape.get_current_user_id(page)
+        self.assertEqual(user_id, "me-1")
+        self.assertIsNone(error)
+
+    def test_fetch_error_is_surfaced_not_raised(self):
+        page = FakePage("https://x", eval_result={"__error": "HTTP 401"})
+        user_id, error = crm_scrape.get_current_user_id(page)
+        self.assertIsNone(user_id)
+        self.assertEqual(error, "HTTP 401")
+
+    def test_a_response_with_no_userid_is_an_error_not_a_crash(self):
+        page = FakePage("https://x", eval_result={})
+        user_id, error = crm_scrape.get_current_user_id(page)
+        self.assertIsNone(user_id)
+        self.assertIsNotNone(error)
+
+
+class ListNewCasesTests(unittest.TestCase):
+    def test_resolves_team_then_filters_incidents_by_its_id(self):
+        page = FakePage("https://x", routes={
+            "teams?": {"value": [{"teamid": "team-1"}]},
+            "incidents": {"value": [
+                {"incidentid": "i1", "ticketnumber": "T1", "title": "Widget broken",
+                 "prioritycode@OData.Community.Display.V1.FormattedValue": "High",
+                 "statuscode@OData.Community.Display.V1.FormattedValue": "New",
+                 "createdon": "2026-08-20T00:00:00Z",
+                 "_customerid_value@OData.Community.Display.V1.FormattedValue": "Contoso"},
+            ]},
+        })
+        cases, error, truncated = crm_scrape.list_new_cases(page, team_name="Helpdesk e-mail")
+        self.assertIsNone(error)
+        self.assertFalse(truncated)
+        self.assertEqual(cases, [{
+            "id": "i1", "ticket_number": "T1", "title": "Widget broken",
+            "priority": "High", "status": "New", "created_on": "2026-08-20T00:00:00Z",
+            "modified_on": None, "customer": "Contoso", "owned_by_me": False,
+            "url": "https://x/main.aspx?appid=" + crm_scrape.CRM_APP_ID + "&forceUCI=1&pagetype=entityrecord&etn=incident&id=i1",
+        }])
+        # The incidents call filters on the team id the teams lookup returned, not the raw name.
+        incidents_call = next(c for c in page.eval_calls if "incidents" in c)
+        self.assertIn("_owningteam_value eq team-1", incidents_call)
+        self.assertIn("statecode eq 0", incidents_call)
+
+    def test_also_includes_cases_owned_by_the_signed_in_user(self):
+        page = FakePage("https://x", routes={
+            "teams?": {"value": [{"teamid": "team-1"}]},
+            "WhoAmI": {"UserId": "me-1"},
+            "incidents": {"value": [
+                {"incidentid": "i1", "ticketnumber": "T1", "_owninguser_value": "me-1"},
+                {"incidentid": "i2", "ticketnumber": "T2", "_owninguser_value": None},
+            ]},
+        })
+        cases, error, truncated = crm_scrape.list_new_cases(page)
+        self.assertIsNone(error)
+        by_ticket = {c["ticket_number"]: c["owned_by_me"] for c in cases}
+        self.assertEqual(by_ticket, {"T1": True, "T2": False})
+        incidents_call = next(c for c in page.eval_calls if "$filter=statecode" in c)
+        self.assertIn("_owningteam_value eq team-1 or _owninguser_value eq me-1", incidents_call)
+
+    def test_a_whoami_failure_degrades_to_the_team_only_filter(self):
+        page = FakePage("https://x", routes={
+            "teams?": {"value": [{"teamid": "team-1"}]},
+            "WhoAmI": {"__error": "HTTP 500"},
+            "incidents": {"value": [{"incidentid": "i1", "ticketnumber": "T1"}]},
+        })
+        cases, error, truncated = crm_scrape.list_new_cases(page)
+        self.assertIsNone(error)
+        self.assertEqual(cases[0]["owned_by_me"], False)
+        incidents_call = next(c for c in page.eval_calls if "$filter=statecode" in c)
+        # No user id to filter on -- the $filter must fall back to the
+        # team-only clause (no "or _owninguser_value eq ..." tacked on).
+        self.assertIn("$filter=statecode eq 0 and _owningteam_value eq team-1&", incidents_call)
+
+    def test_team_not_found_is_an_error_not_an_empty_list(self):
+        page = FakePage("https://x", routes={"teams?": {"value": []}})
+        cases, error, truncated = crm_scrape.list_new_cases(page, team_name="Nonexistent Team")
+        self.assertEqual(cases, [])
+        self.assertFalse(truncated)
+        self.assertIn("Nonexistent Team", error)
+
+    def test_fetch_error_on_the_incidents_query_is_surfaced(self):
+        page = FakePage("https://x", routes={
+            "teams?": {"value": [{"teamid": "team-1"}]},
+            "incidents": {"__error": "HTTP 500"},
+        })
+        cases, error, truncated = crm_scrape.list_new_cases(page)
+        self.assertEqual(cases, [])
+        self.assertFalse(truncated)
+        self.assertEqual(error, "HTTP 500")
+
+    def test_hitting_the_cap_is_reported_as_truncated(self):
+        rows = [{"incidentid": f"i{n}", "ticketnumber": f"T{n}"} for n in range(crm_scrape.NEW_CASES_TOP)]
+        page = FakePage("https://x", routes={
+            "teams?": {"value": [{"teamid": "team-1"}]},
+            "incidents": {"value": rows},
+        })
+        cases, error, truncated = crm_scrape.list_new_cases(page)
+        self.assertIsNone(error)
+        self.assertTrue(truncated)
+        self.assertEqual(len(cases), crm_scrape.NEW_CASES_TOP)
+
+    def test_a_single_quote_in_the_team_name_is_escaped_not_injected_raw(self):
+        page = FakePage("https://x", routes={"teams?": {"value": [{"teamid": "team-1"}]}, "incidents": {"value": []}})
+        crm_scrape.list_new_cases(page, team_name="O'Brien's Team")
+        teams_call = next(c for c in page.eval_calls if "teams?" in c)
+        self.assertIn("O''Brien''s Team", teams_call)
 
 
 class FindTabsTests(unittest.TestCase):

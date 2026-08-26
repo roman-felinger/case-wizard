@@ -36,10 +36,11 @@ class BuildMarkdownMinimalInputTests(unittest.TestCase):
         md = report.build_markdown("T1", [], [], [])
         self.assertIn("# Case T1", md)
         self.assertIn("No CRM case data", md)
-        # Nothing to report at all (no branches, no PRs, no CRM related
-        # links, no Helpdesk link) -- one combined line naming all of them,
-        # not a separate "not found" line per category.
-        self.assertIn("_No branches, pull requests, related links, and a Helpdesk link found for this case._", md)
+        # No CRM related links found (the only category ever reported
+        # "missing" -- see BuildMarkdownRelatedLinksTests' class
+        # docstring: branches/PRs and the Helpdesk link are never reported
+        # as missing, even when genuinely absent).
+        self.assertIn("_No linked Azure DevOps items found for this case._", md)
 
     def test_ado_error_suppresses_branch_and_pr_listing(self):
         branches = [{"project": "P", "repo": "R", "branch": "b", "url": "u"}]
@@ -51,9 +52,10 @@ class BuildMarkdownMinimalInputTests(unittest.TestCase):
         # confirmed "these are the only results" listing.
         self.assertNotIn("[P/R: b]", md)
         self.assertNotIn("!1", md)
-        # An error already explains the empty section -- branches/pull
-        # requests must not also show up as "missing" in the combined line.
-        self.assertIn("_No related links and a Helpdesk link found for this case._", md)
+        # Branches/PRs are never reported as "missing" (see
+        # BuildMarkdownRelatedLinksTests' class docstring), error or not --
+        # only related_links is.
+        self.assertIn("_No linked Azure DevOps items found for this case._", md)
         self.assertNotIn("branches", md)
         self.assertNotIn("pull requests", md)
 
@@ -85,8 +87,8 @@ class BuildMarkdownCrmSectionTests(unittest.TestCase):
         # found that isn't part of the curated summary (e.g. an org's own
         # internal-only custom field) must show up in the brief, even if
         # it's not one of the specially-promoted fields (see
-        # BuildMarkdownPromotedFieldsTests) -- just in the "Other CRM
-        # Fields" catch-all instead of its own subsection.
+        # BuildMarkdownPromotedFieldsTests) -- just in the "Other
+        # Populated CRM Fields" catch-all instead of its own subsection.
         crm_results = [{
             "ticket_number": "T1",
             "all_fields": [{"logical_name": "new_internaldescription", "label": "Internal Description", "value": "agents only"}],
@@ -97,7 +99,7 @@ class BuildMarkdownCrmSectionTests(unittest.TestCase):
     def test_no_extra_fields_omits_the_other_crm_fields_heading(self):
         crm_results = [{"ticket_number": "T1", "all_fields": []}]
         md = report.build_markdown("T1", crm_results, [], [])
-        self.assertNotIn("Other CRM Fields", md)
+        self.assertNotIn("Other Populated CRM Fields", md)
 
     def test_notes_are_rendered_with_subject_and_text(self):
         crm_results = [{"ticket_number": "T1", "notes": [{"subject": "Repro", "text": "Reproduced locally.", "created_on": "2026-08-01"}]}]
@@ -111,7 +113,7 @@ class BuildMarkdownCrmSectionTests(unittest.TestCase):
         # test_a_case_with_nothing_in_details_states_it_all_in_one_line.
         crm_results = [{"ticket_number": "T1"}]
         md = report.build_markdown("T1", crm_results, [], [])
-        self.assertIn("notes", md)
+        self.assertIn("Notes", md)
         self.assertNotIn("**Notes:**", md)
 
     def test_notes_error_is_shown_instead_of_a_blank_section(self):
@@ -123,6 +125,44 @@ class BuildMarkdownCrmSectionTests(unittest.TestCase):
         crm_results = [{"ticket_number": "T1", "notes": [{"subject": "n"}], "notes_truncated": True}]
         md = report.build_markdown("T1", crm_results, [], [])
         self.assertIn("Only the most recent notes are shown", md)
+
+    def test_text_attachment_is_inlined_as_a_code_block(self):
+        crm_results = [{"ticket_number": "T1", "notes": [{
+            "id": "a1", "subject": "s", "text": None, "filename": "error.log", "filesize": 42,
+            "attachment": {"kind": "text", "content": "boom at line 12", "truncated": False},
+        }]}]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertIn("error.log", md)
+        self.assertIn("```\nboom at line 12\n```", md)
+
+    def test_truncated_text_attachment_says_so(self):
+        crm_results = [{"ticket_number": "T1", "notes": [{
+            "id": "a1", "subject": "s", "text": None, "filename": "big.log",
+            "attachment": {"kind": "text", "content": "partial...", "truncated": True},
+        }]}]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertIn("attachment truncated", md)
+
+    def test_image_attachment_renders_a_relative_markdown_image_link_not_a_data_uri(self):
+        crm_results = [{"ticket_number": "T1", "notes": [{
+            "id": "a1b2c3d4e5", "subject": "s", "text": None, "filename": "screenshot.png",
+            "attachment": {"kind": "image", "bytes": b"\x89PNG..."},
+        }]}]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertIn("![screenshot.png](attachments/T1/a1b2c3d4-screenshot.png)", md)
+        self.assertNotIn("base64", md)  # no inline data URI -- see report._note_attachment_lines
+
+    def test_attachment_too_large_or_wrong_type_is_named_only(self):
+        # Same as behavior before this feature existed -- filename (+ size,
+        # now that it's known) with no content, pointing back to CRM.
+        crm_results = [{"ticket_number": "T1", "notes": [{
+            "id": "a1", "subject": "s", "text": None, "filename": "dump.zip", "filesize": 5_000_000,
+            "attachment": None,
+        }]}]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertIn("dump.zip", md)
+        self.assertIn("not included in this brief", md)
+        self.assertNotIn("```", md)
 
     def test_activities_are_rendered_with_type_and_description(self):
         crm_results = [{"ticket_number": "T1", "activities": [
@@ -137,7 +177,7 @@ class BuildMarkdownCrmSectionTests(unittest.TestCase):
         # own "**Activity Timeline:**" header + "no activities" line.
         crm_results = [{"ticket_number": "T1"}]
         md = report.build_markdown("T1", crm_results, [], [])
-        self.assertIn("activity timeline entries", md)
+        self.assertIn("Activity Timeline", md)
         self.assertNotIn("**Activity Timeline:**", md)
 
     def test_activities_error_is_shown_instead_of_a_blank_section(self):
@@ -161,15 +201,18 @@ class BuildMarkdownDetailsSectionTests(unittest.TestCase):
         self.assertLess(details_idx, description_idx)
 
     def test_a_case_with_nothing_in_details_states_it_all_in_one_line(self):
-        # Everything optional in Details (both promoted fields, Notes,
-        # Activity Timeline) missing at once -- one combined line naming
-        # all four, not four separate "not found"/"(not filled in)" lines.
+        # Everything optional in Details (Description, both promoted
+        # fields, Notes, Activity Timeline) missing at once -- one combined
+        # line naming all five, not five separate "not found"/"(not filled
+        # in)"/"_(none)_" lines.
         crm_results = [{"ticket_number": "T1"}]
         md = report.build_markdown("T1", crm_results, [], [])
         self.assertIn(
-            "_No Dodatečný veřejný popis, Interní popis & poznámky, notes, "
-            "and activity timeline entries found for this case._", md)
+            "_No Description, Additional Public Description, Internal Description, Notes, "
+            "and Activity Timeline found for this case._", md)
         self.assertNotIn("_(not filled in)_", md)
+        self.assertNotIn("_(none)_", md)
+        self.assertNotIn("**Description:**", md)
         self.assertNotIn("**Notes:**", md)
         self.assertNotIn("**Activity Timeline:**", md)
 
@@ -183,41 +226,89 @@ class BuildMarkdownDetailsSectionTests(unittest.TestCase):
 
 
 class BuildMarkdownRelatedLinksTests(unittest.TestCase):
-    """Covers "## Related Links": Azure DevOps branches/PRs resolved from a
-    direct reference in the CRM case, the Dev tab's "Related links" grid
-    (see crm_scrape.get_related_links), and the case's Helpdesk link, all
-    combined into one section -- see report._related_links_lines."""
+    """Covers "## Related Links": the case's own CRM record link and its
+    Helpdesk link first -- both always available on a real case -- then
+    the optional, may-or-may-not-exist stuff: the Dev tab's "Related
+    links" grid (see crm_scrape.get_related_links), and finally Azure
+    DevOps branches/PRs resolved from a direct reference found elsewhere
+    in the CRM case (already deduplicated against the Dev-tab grid by
+    case_brief.py before it gets here -- see case_brief.py's own tests)
+    -- all combined into one section, in that order -- see
+    report._related_links_lines."""
 
-    def test_a_related_link_renders_as_a_markdown_link_with_status_and_date(self):
+    def test_the_case_link_renders_first_then_the_helpdesk_link(self):
+        crm_results = [{
+            "ticket_number": "T1",
+            "url": "https://artex-crm.crm4.dynamics.com/main.aspx?appid=x&forceUCI=1&pagetype=entityrecord&etn=incident&id=1",
+            "related_links": [{"name": "PR 1", "url": "https://dev.azure.com/o/P/_git/R/pullrequest/1"}],
+            "all_fields": [{"logical_name": "art_helpdesklink", "label": "Helpdesk link", "value": "https://x"}],
+        }]
+        md = report.build_markdown("T1", crm_results, [], [])
+        case_url = ("https://artex-crm.crm4.dynamics.com/main.aspx?appid=x&forceUCI=1"
+                    "&pagetype=entityrecord&etn=incident&id=1")
+        self.assertIn(f"Case link: [{case_url}]({case_url})", md)
+        # Case link, then Helpdesk link -- both always available on a real
+        # case -- ahead of the optional Dev-tab related link.
+        related_idx = md.index("## Related Links")
+        self.assertLess(md.index("Case link:", related_idx), md.index("Helpdesk link:"))
+        self.assertLess(md.index("Helpdesk link:"), md.index("PR 1:"))
+
+    def test_a_missing_case_url_is_not_counted_as_missing(self):
+        # Unlike the Dev-tab links/branches/PRs, the case's own link isn't
+        # an optional related resource -- so its absence must never show
+        # up in the combined "missing" line.
+        crm_results = [{"ticket_number": "T1"}]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertNotIn("Case link", md)
+        self.assertNotIn("a case link", md)
+
+    def test_a_related_link_renders_with_a_plain_text_label_and_the_url_as_the_hyperlink(self):
+        # Unlike the ADO-resolved branches/PRs below it in the section, a
+        # related link's label is plain text and the URL itself is the
+        # hyperlink -- same convention as the Helpdesk link, and readable/
+        # copyable without clicking through. Status/created-on are
+        # deliberately not shown -- CRM's own snapshot from whenever the
+        # link was attached, not refreshed since, unlike the ADO section.
         crm_results = [{"ticket_number": "T1", "related_links": [
             {"name": "PR 20216 ✅ (CU-BTECH)", "url": "https://dev.azure.com/o/P/_git/R/pullrequest/20216",
              "status": "Active", "created_on": "2026-08-13T11:18:01Z"},
         ]}]
         md = report.build_markdown("T1", crm_results, [], [])
         self.assertIn("## Related Links", md)
-        self.assertIn("[PR 20216 ✅ (CU-BTECH)](https://dev.azure.com/o/P/_git/R/pullrequest/20216)", md)
-        self.assertIn("Active", md)
-        self.assertIn("2026-08-13T11:18:01Z", md)
+        self.assertIn(
+            "- PR 20216 ✅ (CU-BTECH): [https://dev.azure.com/o/P/_git/R/pullrequest/20216]"
+            "(https://dev.azure.com/o/P/_git/R/pullrequest/20216)", md)
+        self.assertNotIn("Active", md)
+        self.assertNotIn("2026-08-13T11:18:01Z", md)
 
     def test_a_link_with_no_name_falls_back_to_the_url_as_the_label(self):
         crm_results = [{"ticket_number": "T1", "related_links": [{"name": None, "url": "https://dev.azure.com/x"}]}]
         md = report.build_markdown("T1", crm_results, [], [])
-        self.assertIn("[https://dev.azure.com/x](https://dev.azure.com/x)", md)
+        self.assertIn("- https://dev.azure.com/x: [https://dev.azure.com/x](https://dev.azure.com/x)", md)
 
     def test_related_links_error_is_shown_instead_of_the_list(self):
         crm_results = [{"ticket_number": "T1", "related_links_error": "HTTP 403"}]
         md = report.build_markdown("T1", crm_results, [], [])
         self.assertIn("Could not load linked Azure DevOps items: HTTP 403", md)
-        # The error already explains why nothing is listed -- "related
-        # links" must not also show up as "missing" in the combined line.
-        self.assertIn("_No branches, pull requests, and a Helpdesk link found for this case._", md)
+        # The error already explains why nothing is listed -- "linked
+        # Azure DevOps items" must not also show up as "missing" in the
+        # combined line. Nothing else (case link, Helpdesk link, branches/
+        # PRs) is ever reported missing at all (see the class docstring),
+        # so with the only trackable category errored out, no "missing"
+        # line is emitted at all. Sliced to "## Related Links" only --
+        # "## Details" has its own, unrelated combined "missing" line.
+        related_section = md[md.index("## Related Links"):md.index("## Details")]
+        self.assertNotIn("found for this case", related_section)
 
     def test_nothing_found_at_all_is_stated_in_one_combined_line(self):
+        # Only related_links is ever reported missing -- branches/PRs
+        # aren't (even genuinely empty, see the class docstring), and
+        # case link/Helpdesk link never are.
         crm_results = [{"ticket_number": "T1", "related_links": []}]
         md = report.build_markdown("T1", crm_results, [], [])
-        self.assertIn("_No branches, pull requests, related links, and a Helpdesk link found for this case._", md)
+        self.assertIn("_No linked Azure DevOps items found for this case._", md)
 
-    def test_helpdesk_link_renders_as_the_last_entry(self):
+    def test_helpdesk_link_renders_before_related_links_and_ado(self):
         crm_results = [{
             "ticket_number": "T1",
             "all_fields": [{"logical_name": "art_helpdesklink", "label": "Helpdesk link",
@@ -225,11 +316,19 @@ class BuildMarkdownRelatedLinksTests(unittest.TestCase):
             "related_links": [{"name": "PR 1", "url": "https://dev.azure.com/o/P/_git/R/pullrequest/1"}],
         }]
         md = report.build_markdown("T1", crm_results, [], [])
-        self.assertIn("[Helpdesk link](https://artexhelpdesk.powerappsportals.com/support/edit-case/?id=1)", md)
-        # Must come after the CRM related link -- "last member".
-        self.assertLess(md.index("[PR 1]"), md.index("[Helpdesk link]"))
-        # Present, so it must not also show up as "missing" in the combined line.
-        self.assertIn("_No branches and pull requests found for this case._", md)
+        # Label is plain text, not the hyperlink -- the URL itself is.
+        self.assertIn("Helpdesk link: [https://artexhelpdesk.powerappsportals.com/support/edit-case/?id=1]"
+                       "(https://artexhelpdesk.powerappsportals.com/support/edit-case/?id=1)", md)
+        # Helpdesk link -- always available -- comes before the optional
+        # Dev-tab related link, and before the (here empty) ADO
+        # branches/PRs block -- see the class docstring for the order.
+        self.assertLess(md.index("Helpdesk link:"), md.index("PR 1:"))
+        # Branches/PRs genuinely empty here, but that's never reported as
+        # "missing" -- see the class docstring. Sliced to "## Related
+        # Links" only -- "## Details" has its own, unrelated combined
+        # "missing" line.
+        related_section = md[md.index("## Related Links"):md.index("## Details")]
+        self.assertNotIn("found for this case", related_section)
 
     def test_helpdesk_link_is_excluded_from_other_crm_fields(self):
         crm_results = [{
@@ -237,7 +336,7 @@ class BuildMarkdownRelatedLinksTests(unittest.TestCase):
             "all_fields": [{"logical_name": "art_helpdesklink", "label": "Helpdesk link", "value": "https://x"}],
         }]
         md = report.build_markdown("T1", crm_results, [], [])
-        self.assertNotIn("Other CRM Fields", md)  # the only field present was promoted into Related Links
+        self.assertNotIn("Other Populated CRM Fields", md)  # the only field present was promoted into Related Links
 
     def test_helpdesk_link_missing_value_does_not_render_or_crash(self):
         crm_results = [{
@@ -245,8 +344,56 @@ class BuildMarkdownRelatedLinksTests(unittest.TestCase):
             "all_fields": [{"logical_name": "art_helpdesklink", "label": "Helpdesk link", "value": None}],
         }]
         md = report.build_markdown("T1", crm_results, [], [])
-        self.assertNotIn("Helpdesk link]", md)
-        self.assertIn("_No branches, pull requests, related links, and a Helpdesk link found for this case._", md)
+        self.assertNotIn("Helpdesk link:", md)
+        # Absence of the Helpdesk link is never reported as "missing" --
+        # see the class docstring -- so only related_links shows up.
+        self.assertIn("_No linked Azure DevOps items found for this case._", md)
+
+    def test_a_related_link_is_copyable_without_clicking_through(self):
+        # The URL is the hyperlink's own visible text (same convention as
+        # the Helpdesk link), so it's readable/copyable without clicking
+        # through -- no separate raw-URL backtick trailer needed.
+        crm_results = [{"ticket_number": "T1", "related_links": [
+            {"name": "PR 1", "url": "https://dev.azure.com/o/P/_git/R/pullrequest/1"},
+        ]}]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertIn(
+            "- PR 1: [https://dev.azure.com/o/P/_git/R/pullrequest/1]"
+            "(https://dev.azure.com/o/P/_git/R/pullrequest/1)", md)
+
+    def test_helpdesk_link_label_is_plain_text_and_the_url_itself_is_the_hyperlink(self):
+        # Unlike the ADO-resolved branches/PRs (label as the hyperlink),
+        # the Helpdesk link's own label is plain text and the URL is both
+        # the hyperlink's target *and* its visible text -- so it's
+        # clickable and still readable/copyable without clicking through.
+        # Same convention as the related-links bullets above it.
+        crm_results = [{
+            "ticket_number": "T1",
+            "all_fields": [{"logical_name": "art_helpdesklink", "label": "Helpdesk link",
+                             "value": "https://artexhelpdesk.powerappsportals.com/support/edit-case/?id=1"}],
+        }]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertIn(
+            "Helpdesk link: [https://artexhelpdesk.powerappsportals.com/support/edit-case/?id=1]"
+            "(https://artexhelpdesk.powerappsportals.com/support/edit-case/?id=1)", md)
+        self.assertNotIn("[Helpdesk link]", md)
+
+    def test_a_helpdesk_link_with_no_other_related_links_does_not_read_as_contradictory(self):
+        # Regression: a case with only a Helpdesk link (no ADO branches/
+        # PRs/Dev-tab grid entries) must not say "No ... related links ...
+        # found" right below a Helpdesk link bullet -- that reads as
+        # self-contradictory, since the Helpdesk link IS a related link.
+        # The Dev-tab-grid-specific "missing" category is named distinctly
+        # ("linked Azure DevOps items") so this never happens.
+        crm_results = [{
+            "ticket_number": "T1",
+            "all_fields": [{"logical_name": "art_helpdesklink", "label": "Helpdesk link",
+                             "value": "https://artexhelpdesk.powerappsportals.com/support/edit-case/?id=1"}],
+        }]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertIn("Helpdesk link:", md)
+        self.assertNotIn("related links found for this case", md)
+        self.assertIn("_No linked Azure DevOps items found for this case._", md)
 
     def test_ado_branches_and_prs_are_not_duplicated_across_multiple_cases(self):
         # Branches/PRs are whole-run, not per-case -- must appear only once
@@ -260,39 +407,62 @@ class BuildMarkdownRelatedLinksTests(unittest.TestCase):
         self.assertEqual(md.count("[P/R: b]"), 1)
         self.assertEqual(md.count("## Related Links"), 2)
 
+    def test_no_branches_or_pull_requests_never_states_a_not_found_line(self):
+        # Regression: a case genuinely having no branches/PRs isn't worth
+        # a dedicated "not found" callout every time (unlike related_links,
+        # which still gets one) -- see the class docstring. Must hold even
+        # with everything else present, and even with an ado_note.
+        crm_results = [{
+            "ticket_number": "T1",
+            "all_fields": [{"logical_name": "art_helpdesklink", "label": "Helpdesk link", "value": "https://x"}],
+            "related_links": [{"name": "PR 1", "url": "https://dev.azure.com/o/P/_git/R/pullrequest/1"}],
+        }]
+        md = report.build_markdown("T1", crm_results, [], [],
+                                    ado_note="Resolved 0/0 Azure DevOps reference(s) found directly in the CRM case.")
+        self.assertNotIn("branches", md)
+        self.assertNotIn("pull requests", md)
+        # Sliced to "## Related Links" only -- "## Details" has its own,
+        # unrelated combined "missing" line.
+        related_section = md[md.index("## Related Links"):md.index("## Details")]
+        self.assertNotIn("found for this case", related_section)
+
 
 class BuildMarkdownPromotedFieldsTests(unittest.TestCase):
     """Covers promoted_fields: specific CRM custom fields (matched by
     logical_name) get their own proper subsection right after Description,
-    instead of being buried in the "Other CRM Fields" catch-all at the very
+    instead of being buried in the "Other Populated CRM Fields" catch-all at the very
     bottom of the brief -- see report.py's module docstring / DEFAULT_PROMOTED_FIELDS."""
 
     def test_a_promoted_field_not_populated_on_the_case_is_named_in_the_combined_missing_line(self):
         # crm_scrape._extract_all_fields drops None/"" values entirely, so
         # an unfilled promoted field is simply absent from all_fields -- it
-        # must still be named explicitly (using the field's documented
-        # Czech label as a fallback -- there's no metadata-sourced label
-        # available for a field that wasn't returned) in Details' combined
-        # "missing" line, rather than silently vanishing from the brief.
+        # must still be named explicitly (using the field's fixed English
+        # label -- there's no metadata-sourced label available for a field
+        # that wasn't returned) in Details' combined "missing" line, rather
+        # than silently vanishing from the brief.
         crm_results = [{
             "ticket_number": "T1",
+            "description": "Something broke.",
             "all_fields": [{"logical_name": "art_internaldescriptionandnotes",
                              "label": "Interní popis & poznámky", "value": "internal notes"}],
             "notes": [{"subject": "n"}],
             "activities": [{"type": "call"}],
         }]
         md = report.build_markdown("T1", crm_results, [], [])
-        self.assertIn("_No Dodatečný veřejný popis found for this case._", md)
-        self.assertNotIn("Interní popis & poznámky found for this case", md)
+        self.assertIn("_No Additional Public Description found for this case._", md)
+        self.assertNotIn("Internal Description found for this case", md)
 
     def test_a_promoted_field_gets_its_own_subsection_after_description(self):
+        # The header uses the fixed English label, overriding whatever
+        # (Czech, on this org) label the CRM metadata call returned.
         crm_results = [{
             "ticket_number": "T1",
             "all_fields": [{"logical_name": "art_internaldescriptionandnotes",
                              "label": "Interní popis & poznámky", "value": "internal analysis notes"}],
         }]
         md = report.build_markdown("T1", crm_results, [], [])
-        self.assertIn("**Interní popis & poznámky:**\n\ninternal analysis notes", md)
+        self.assertIn("**Internal Description:**\n\ninternal analysis notes", md)
+        self.assertNotIn("Interní popis & poznámky", md)
 
     def test_a_promoted_field_is_not_also_duplicated_in_the_other_crm_fields_section(self):
         crm_results = [{
@@ -301,7 +471,7 @@ class BuildMarkdownPromotedFieldsTests(unittest.TestCase):
                              "label": "Interní popis & poznámky", "value": "internal analysis notes"}],
         }]
         md = report.build_markdown("T1", crm_results, [], [])
-        self.assertNotIn("Other CRM Fields", md)  # the only field present was promoted, nothing leftover
+        self.assertNotIn("Other Populated CRM Fields", md)  # the only field present was promoted, nothing leftover
 
     def test_non_promoted_fields_are_pushed_to_the_bottom_other_crm_fields_section(self):
         crm_results = [{
@@ -309,9 +479,9 @@ class BuildMarkdownPromotedFieldsTests(unittest.TestCase):
             "all_fields": [{"logical_name": "new_randomfield", "label": "Random Field", "value": "some value"}],
         }]
         md = report.build_markdown("T1", crm_results, [], [])
-        self.assertIn("## Other CRM Fields", md)
+        self.assertIn("## Other Populated CRM Fields", md)
         # Must come after the case's own details -- "pull down ... to the bottom of the brief".
-        self.assertGreater(md.index("## Other CRM Fields"), md.index("### "))
+        self.assertGreater(md.index("## Other Populated CRM Fields"), md.index("### "))
         # logical_name is shown alongside the label so a future promoted-field
         # pick doesn't require guessing it (see report.py's leftover rendering).
         self.assertIn("**Random Field** (`new_randomfield`): some value", md)
@@ -326,13 +496,13 @@ class BuildMarkdownPromotedFieldsTests(unittest.TestCase):
             "all_fields": [
                 {"logical_name": "art_internaldescriptionandnotes",
                  "label": "Interní popis & poznámky", "value": "internal notes"},
-                {"logical_name": "art_additionalpublicdescription",
+                {"logical_name": "art_descriptionadditionalpublic",
                  "label": "Dodatečný veřejný popis", "value": "public follow-up"},
             ],
         }]
         md = report.build_markdown("T1", crm_results, [], [])
-        self.assertLess(md.index("Customer-visible summary."), md.index("Dodatečný veřejný popis"))
-        self.assertLess(md.index("Dodatečný veřejný popis"), md.index("Interní popis & poznámky"))
+        self.assertLess(md.index("Customer-visible summary."), md.index("Additional Public Description"))
+        self.assertLess(md.index("Additional Public Description"), md.index("Internal Description"))
 
     def test_custom_promoted_fields_param_overrides_the_default(self):
         crm_results = [{
@@ -341,7 +511,7 @@ class BuildMarkdownPromotedFieldsTests(unittest.TestCase):
         }]
         md = report.build_markdown("T1", crm_results, [], [], promoted_fields=["new_randomfield"])
         self.assertIn("**Random Field:**\n\nsome value", md)
-        self.assertNotIn("Other CRM Fields", md)
+        self.assertNotIn("Other Populated CRM Fields", md)
 
     def test_multiple_cases_with_leftover_fields_are_labeled_in_the_bottom_section(self):
         crm_results = [
@@ -351,7 +521,7 @@ class BuildMarkdownPromotedFieldsTests(unittest.TestCase):
              "all_fields": [{"logical_name": "new_b", "label": "B", "value": "2"}]},
         ]
         md = report.build_markdown("T1", crm_results, [], [])
-        other_section = md[md.index("## Other CRM Fields"):]
+        other_section = md[md.index("## Other Populated CRM Fields"):]
         # Each case's title appears again as its own subheading within the
         # bottom section (on top of its own heading up in CRM Case(s)) --
         # a single-case brief skips this subheading entirely (see the
@@ -361,6 +531,159 @@ class BuildMarkdownPromotedFieldsTests(unittest.TestCase):
         self.assertIn("### Case Two", other_section)
         self.assertIn("**A** (`new_a`): 1", other_section)
         self.assertIn("**B** (`new_b`): 2", other_section)
+
+
+class BuildMarkdownEstimatesAndTotalsTests(unittest.TestCase):
+    """Covers "## Estimates & Totals": a fixed curated set of exactly four
+    fields off the case form's own "Estimate & Totals" widget -- Estimate,
+    Billable Hours, Non-Billable Hours, Total Hours, in that display order
+    -- matched by label (not logical_name, since these org rollup fields'
+    logical names aren't known ahead of time) via
+    report._classify_estimate_field/_ESTIMATE_FIELD_MATCHERS. Everything
+    else the widget doesn't show (an approver lookup, price, a rollup's
+    own "(stav)"/"(datum poslední aktualizace)" metadata) is left alone --
+    not specially dropped, just not pulled into this section, so it still
+    lands in "Other Populated CRM Fields" like any other uncurated field. No
+    explanatory blurb and no `logical_name` per bullet -- this section is
+    meant to be skimmed, not used to hunt for a field worth promoting."""
+
+    def test_all_four_fields_render_in_fixed_display_order(self):
+        # Real labels from the case form's "Estimate & Totals" widget --
+        # note the word order differs from what EntityDefinitions metadata
+        # returns for the same fields elsewhere in this test class
+        # ("Celkem fakturované hodiny" etc.) -- both must match.
+        crm_results = [{
+            "ticket_number": "T1",
+            "all_fields": [
+                {"logical_name": "a", "label": "Nefakturované hodiny celkem", "value": "0,00"},
+                {"logical_name": "b", "label": "Hodiny celkem", "value": "2,00"},
+                {"logical_name": "c", "label": "Odhad", "value": "3,00"},
+                {"logical_name": "d", "label": "Fakturované hodiny celkem", "value": "2,00"},
+            ],
+        }]
+        md = report.build_markdown("T1", crm_results, [], [])
+        section = md[md.index("## Estimates & Totals"):]
+        self.assertIn(
+            "- **Estimate:** 3,00\n"
+            "- **Billable Hours:** 2,00\n"
+            "- **Non-Billable Hours:** 0,00\n"
+            "- **Total Hours:** 2,00",
+            section)
+        self.assertNotIn("Other Populated CRM Fields", md)  # nothing left over once all four are pulled out
+
+    def test_matches_the_metadata_label_word_order_too(self):
+        crm_results = [{
+            "ticket_number": "T1",
+            "all_fields": [
+                {"logical_name": "a", "label": "Celkem fakturované hodiny", "value": "1,50"},
+                {"logical_name": "b", "label": "Celkem nefakturované hodiny", "value": "0,00"},
+            ],
+        }]
+        md = report.build_markdown("T1", crm_results, [], [])
+        section = md[md.index("## Estimates & Totals"):]
+        self.assertIn("**Billable Hours:** 1,50", section)
+        self.assertIn("**Non-Billable Hours:** 0,00", section)
+
+    def test_no_explanatory_blurb_and_no_logical_name_shown(self):
+        crm_results = [{
+            "ticket_number": "T1",
+            "all_fields": [{"logical_name": "art_totalbillablehours",
+                             "label": "Celkem fakturované hodiny", "value": "1,50"}],
+        }]
+        md = report.build_markdown("T1", crm_results, [], [])
+        section = md[md.index("## Estimates & Totals"):]
+        self.assertNotIn("art_totalbillablehours", section)
+        self.assertNotIn("low priority to read", section)
+
+    def test_all_four_always_render_even_when_only_one_field_is_present(self):
+        # A field crm_scrape never returned at all (dropped upstream as
+        # empty/None -- see crm_scrape._extract_all_fields) must still get
+        # its own line here, as an em dash -- not silently vanish from the
+        # section just because this case never had it filled in.
+        crm_results = [{
+            "ticket_number": "T1",
+            "all_fields": [{"logical_name": "a", "label": "Odhad", "value": "3,00"}],
+        }]
+        md = report.build_markdown("T1", crm_results, [], [])
+        section = md[md.index("## Estimates & Totals"):]
+        self.assertIn("**Estimate:** 3,00", section)
+        self.assertIn("**Billable Hours:** —", section)
+        self.assertIn("**Non-Billable Hours:** —", section)
+        self.assertIn("**Total Hours:** —", section)
+
+    def test_rollup_metadata_suffixed_fields_are_not_matched(self):
+        # A rollup field's own calculation-status/last-run-date
+        # sub-fields -- metadata about the value, not the value itself --
+        # must not be picked up as if they were the real Billable Hours
+        # field, and must not suppress the real one either.
+        crm_results = [{
+            "ticket_number": "T1",
+            "all_fields": [
+                {"logical_name": "a", "label": "Total Billable Hours (stav)", "value": "1"},
+                {"logical_name": "b", "label": "Total price (datum poslední aktualizace)",
+                 "value": "26.08.2026 7:09"},
+                {"logical_name": "c", "label": "Celkem fakturované hodiny", "value": "1,50"},
+            ],
+        }]
+        md = report.build_markdown("T1", crm_results, [], [])
+        section = md[md.index("## Estimates & Totals"):md.index("## Other Populated CRM Fields")]
+        self.assertIn("**Billable Hours:** 1,50", section)
+        self.assertNotIn("(stav)", section)
+        self.assertNotIn("aktualizace", section)
+        # The two metadata fields, not matching any category, fall
+        # through to "Other Populated CRM Fields" like any other uncurated field.
+        other_section = md[md.index("## Other Populated CRM Fields"):]
+        self.assertIn("Total Billable Hours (stav)", other_section)
+        self.assertIn("Total price (datum poslední aktualizace)", other_section)
+
+    def test_unrelated_fields_are_not_pulled_in_and_still_land_in_other_crm_fields(self):
+        # Kilometers/price/dispatch counts/an approver lookup -- real
+        # fields the widget doesn't show as one of the four totals --
+        # must not be swept into "## Estimates & Totals" just for
+        # mentioning "celkem"/"total" in passing.
+        crm_results = [{
+            "ticket_number": "T1",
+            "all_fields": [
+                {"logical_name": "a", "label": "Celkem kilometrů", "value": "0,00"},
+                {"logical_name": "b", "label": "Cena celkem", "value": "0,00"},
+                {"logical_name": "c", "label": "Celkem výjezdů", "value": "0,00"},
+                {"logical_name": "d", "label": "Odhad schválen", "value": "Jane Doe"},
+                {"logical_name": "e", "label": "Odhad", "value": "3,00"},
+            ],
+        }]
+        md = report.build_markdown("T1", crm_results, [], [])
+        section = md[md.index("## Estimates & Totals"):md.index("## Other Populated CRM Fields")]
+        self.assertIn("**Estimate:** 3,00", section)
+        self.assertNotIn("kilometrů", section)
+        self.assertNotIn("Cena celkem", section)
+        self.assertNotIn("výjezdů", section)
+        self.assertNotIn("Odhad schválen", section)
+        other_section = md[md.index("## Other Populated CRM Fields"):]
+        self.assertIn("Celkem kilometrů", other_section)
+        self.assertIn("Cena celkem", other_section)
+        self.assertIn("Celkem výjezdů", other_section)
+        self.assertIn("Odhad schválen", other_section)
+
+    def test_section_is_placed_right_before_other_crm_fields(self):
+        crm_results = [{
+            "ticket_number": "T1",
+            "all_fields": [
+                {"logical_name": "a", "label": "Odhad", "value": "3,00"},
+                {"logical_name": "b", "label": "Random Field", "value": "some value"},
+            ],
+        }]
+        md = report.build_markdown("T1", crm_results, [], [])
+        estimates_idx = md.index("## Estimates & Totals")
+        other_idx = md.index("## Other Populated CRM Fields")
+        self.assertLess(estimates_idx, other_idx)
+
+    def test_no_matching_fields_omits_the_heading(self):
+        crm_results = [{
+            "ticket_number": "T1",
+            "all_fields": [{"logical_name": "a", "label": "Random Field", "value": "some value"}],
+        }]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertNotIn("Estimates & Totals", md)
 
 
 class BuildMarkdownAdoNoteTests(unittest.TestCase):
@@ -402,6 +725,50 @@ class BuildMarkdownRelatedLinksPlacementTests(unittest.TestCase):
         self.assertIn("## Related Links", md)
 
 
+class ModifiedOnMarkerTests(unittest.TestCase):
+    """report.build_markdown's hidden staleness marker -- read back by
+    case-getter (see its own is_stale/_brief_modified_on) to tell whether
+    the CRM case has changed since this brief was written."""
+
+    def test_marker_is_stamped_when_modified_on_is_present(self):
+        crm_results = [{"ticket_number": "T1", "modified_on": "2026-08-20T10:00:00Z"}]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertIn("<!-- case-brief:crm-modified-on=2026-08-20T10:00:00Z -->", md)
+
+    def test_no_marker_when_modified_on_is_missing(self):
+        crm_results = [{"ticket_number": "T1"}]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertNotIn("crm-modified-on", md)
+
+    def test_an_errored_case_result_is_never_used_for_the_marker(self):
+        crm_results = [{"error": "boom", "modified_on": "should-never-appear"}]
+        md = report.build_markdown("T1", crm_results, [], [])
+        self.assertNotIn("should-never-appear", md)
+
+
+class CollectAttachmentsTests(unittest.TestCase):
+    def test_collects_only_image_attachments(self):
+        crm_results = [{"ticket_number": "T1", "notes": [
+            {"id": "a1b2c3d4", "filename": "screenshot.png", "attachment": {"kind": "image", "bytes": b"PNG"}},
+            {"id": "a5b6c7d8", "filename": "notes.txt", "attachment": {"kind": "text", "content": "x", "truncated": False}},
+            {"id": "a9b0c1d2", "filename": "dump.zip", "attachment": None},
+        ]}]
+        attachments = report.collect_attachments("T1", crm_results)
+        self.assertEqual(len(attachments), 1)
+        self.assertEqual(attachments[0]["relative_path"], "attachments/T1/a1b2c3d4-screenshot.png")
+        self.assertEqual(attachments[0]["bytes"], b"PNG")
+
+    def test_errored_crm_results_are_skipped(self):
+        crm_results = [{"error": "boom", "notes": [
+            {"id": "a1", "filename": "x.png", "attachment": {"kind": "image", "bytes": b"x"}},
+        ]}]
+        self.assertEqual(report.collect_attachments("T1", crm_results), [])
+
+    def test_no_attachments_returns_an_empty_list(self):
+        crm_results = [{"ticket_number": "T1", "notes": [{"id": "a1", "subject": "s", "text": "t"}]}]
+        self.assertEqual(report.collect_attachments("T1", crm_results), [])
+
+
 class WriteAndOpenTests(unittest.TestCase):
     def test_writes_the_markdown_to_a_sanitized_filename_under_output_dir(self):
         # _safe_name deliberately keeps dots (case numbers like "T26-11.845"
@@ -423,6 +790,20 @@ class WriteAndOpenTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             nested = os.path.join(d, "not-yet-created")
             path = report.write_and_open("content", nested, "T1")
+            self.assertTrue(os.path.exists(path))
+
+    def test_attachments_are_written_alongside_the_brief(self):
+        with tempfile.TemporaryDirectory() as d:
+            attachments = [{"relative_path": "attachments/T1/a1-screenshot.png", "bytes": b"\x89PNG..."}]
+            report.write_and_open("content", d, "T1", attachments=attachments)
+            att_path = os.path.join(d, "attachments", "T1", "a1-screenshot.png")
+            self.assertTrue(os.path.exists(att_path))
+            with open(att_path, "rb") as f:
+                self.assertEqual(f.read(), b"\x89PNG...")
+
+    def test_no_attachments_is_a_no_op(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = report.write_and_open("content", d, "T1")  # attachments defaults to None
             self.assertTrue(os.path.exists(path))
 
 

@@ -46,23 +46,26 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TICKET_FIELD = "ticketnumber"
 # Also the Dataverse OAuth resource identifier (see lib/dataverse_auth.py).
 CRM_ORIGIN = "https://artex-crm.crm4.dynamics.com"
-OUTPUT_DIR = "./case-briefs"
+OUTPUT_DIR = "./briefs"
 
 
 def _collect_reference_text(crm_results):
     """Flattens every bit of text case-brief pulled from CRM -- title,
     description, every extra field crm_scrape.py found, every note, every
-    activity, every entry in the Dev tab's Related links grid -- into one
-    blob to scan for direct Azure DevOps PR/branch links (see
-    ado_api.parse_direct_references). Errors and non-string values are
-    skipped rather than raising: this is a best-effort scan, not something
-    that should ever fail the brief.
+    activity -- into one blob to scan for direct Azure DevOps PR/branch
+    links (see ado_api.parse_direct_references). Errors and non-string
+    values are skipped rather than raising: this is a best-effort scan,
+    not something that should ever fail the brief.
 
-    Related links are included here (not just rendered on their own, see
-    report.py) so a PR attached directly in CRM gets the exact same
-    resolve-it-for-real treatment (title/status/created-by via
-    ado_api.get_pull_request) as one a support engineer merely pasted into
-    a note -- not just the raw name/URL CRM itself stored.
+    Deliberately does NOT include the Dev tab's own "Related links" grid
+    (crm_scrape.get_related_links) -- report.py renders those directly
+    from the CRM data already (see report._related_links_lines), so
+    scanning them here too would just mean resolving them via the ADO API
+    only to immediately discard the result as a duplicate (see
+    run_ado_lookup/_related_link_refs, which excludes anything already
+    covered by related_links from what this function's callers resolve --
+    covering a related link pasted redundantly into a note or field too,
+    not just the grid entry itself).
     """
     parts = []
     for c in crm_results or []:
@@ -86,12 +89,32 @@ def _collect_reference_text(crm_results):
                 v = a.get(key)
                 if isinstance(v, str):
                     parts.append(v)
-        for rl in c.get("related_links") or []:
-            for key in ("name", "url"):
-                v = rl.get(key)
-                if isinstance(v, str):
-                    parts.append(v)
     return "\n".join(parts)
+
+
+def _related_link_refs(crm_results):
+    """(pr_refs, branch_refs) already covered by the CRM case form's own
+    Dev-tab "Related links" grid (see crm_scrape.get_related_links) --
+    parsed from just those entries' URLs the same way
+    ado_api.parse_direct_references parses everything else, so
+    run_ado_lookup can exclude them from its own resolved branches/pull_requests.
+
+    Without this, the same PR/branch gets linked twice in the rendered
+    brief: once via report.py's own related_links rendering (the raw CRM
+    grid entry), and again via this module's direct-reference resolution
+    -- a related link's URL is itself part of the text
+    _collect_reference_text scans, so it always also turns up as a "direct
+    reference" in its own right.
+    """
+    urls = []
+    for c in crm_results or []:
+        if c.get("error"):
+            continue
+        for rl in c.get("related_links") or []:
+            url = rl.get("url")
+            if isinstance(url, str):
+                urls.append(url)
+    return ado_api.parse_direct_references("\n".join(urls))
 
 
 def run_ado_lookup(crm_results):
@@ -101,6 +124,16 @@ def run_ado_lookup(crm_results):
     org-wide search -- see lib/ado_api.py's module docstring for why --
     so if the case doesn't already link its own work, this comes back
     empty rather than searching for it.
+
+    Anything already covered by CRM's own Dev-tab related links grid (see
+    _related_link_refs) is excluded before resolving -- report.py renders
+    those directly from the CRM data already, so resolving and listing
+    them again here would link the same PR/branch twice. Matched by
+    (project, id) for PRs -- Azure DevOps PR ids are unique org-wide, and
+    matching on repo too is unreliable here: the CRM-stored related-link
+    URL and the one resolved via the ADO API can represent the same repo
+    with a different string (a repo GUID vs. its human-readable name) --
+    and by (project, branch) for branches, for the same reason.
 
     Returns (branches, pull_requests, ado_error, ado_note). ado_note is None
     when nothing was found in the text scan -- report.py's "## Related
@@ -119,6 +152,12 @@ def run_ado_lookup(crm_results):
     """
     ref_text = _collect_reference_text(crm_results)
     pr_refs, branch_refs = ado_api.parse_direct_references(ref_text)
+
+    related_pr_refs, related_branch_refs = _related_link_refs(crm_results)
+    related_pr_keys = {(r["project"].lower(), r["id"]) for r in related_pr_refs}
+    related_branch_keys = {(r["project"].lower(), r["branch"].lower()) for r in related_branch_refs}
+    pr_refs = [r for r in pr_refs if (r["project"].lower(), r["id"]) not in related_pr_keys]
+    branch_refs = [r for r in branch_refs if (r["project"].lower(), r["branch"].lower()) not in related_branch_keys]
 
     if not (pr_refs or branch_refs):
         return [], [], None, None
@@ -154,9 +193,16 @@ def run_ado_lookup(crm_results):
 
 
 def demo_data(case_number):
+    demo_incident_id = "00000000-0000-0000-0000-0000000000aa"
     crm_results = [{
         "title": "Posting error in Sales Invoice",
         "ticket_number": case_number or "12345",
+        "id": demo_incident_id,
+        # Shows off the case's own CRM record deep link (see
+        # crm_scrape._to_result / report._related_links_lines) -- the first
+        # entry in "## Related Links".
+        "url": f"{CRM_ORIGIN}/main.aspx?appid={crm_scrape.CRM_APP_ID}&forceUCI=1"
+               f"&pagetype=entityrecord&etn=incident&id={demo_incident_id}",
         "customer": "Contoso s.r.o.",
         "owner": "Jane Doe",
         "priority": "High",
@@ -166,13 +212,13 @@ def demo_data(case_number):
         # Shows off crm_scrape.py's "get everything" fields -- what used to
         # be silently dropped by a curated $select list, e.g. an org's own
         # internal-only custom field. Uses the real logical names
-        # (art_additionalpublicdescription/art_internaldescriptionandnotes,
+        # (art_descriptionadditionalpublic/art_internaldescriptionandnotes,
         # see report.DEFAULT_PROMOTED_FIELDS) so --demo actually exercises
         # both promoted-field-under-Description paths, in their real order,
         # instead of just landing in "Other CRM Fields" like a made-up
         # field name would.
         "all_fields": [
-            {"logical_name": "art_additionalpublicdescription", "label": "Dodatečný veřejný popis",
+            {"logical_name": "art_descriptionadditionalpublic", "label": "Dodatečný veřejný popis",
              "value": "Public-facing summary: invoice posting is delayed while we investigate a dimension error."},
             {"logical_name": "art_internaldescriptionandnotes", "label": "Interní popis & poznámky",
              "value": "Looks like the dimension default was cleared during the last data import -- check DIM-4021 before escalating."},
@@ -187,6 +233,16 @@ def demo_data(case_number):
         "notes": [
             {"subject": "Repro steps confirmed", "created_on": "2026-08-19T10:03:00Z",
              "text": "Reproduced on a copy of the customer's database. Fails only when the dimension default is missing.", "filename": None},
+            # Shows off attachment content (2026-08-26) -- a small text-like
+            # attachment (see crm_scrape._fetch_inlinable_attachments) gets
+            # inlined as a fenced code block right in the brief, not just
+            # named. An image attachment would instead be saved next to the
+            # brief and linked with a Markdown image tag (see
+            # report.collect_attachments) -- not shown here since --demo
+            # never calls crm_scrape at all, so there's no real file to save.
+            {"subject": "Error log attached", "created_on": "2026-08-19T11:15:00Z", "text": None,
+             "filename": "error.log", "mimetype": "text/plain", "filesize": 128,
+             "attachment": {"kind": "text", "content": "2026-08-19 11:12:03 ERROR DimensionDefaultMissing (invoice 103042)", "truncated": False}},
         ],
         "notes_truncated": False, "notes_error": None,
         "activities": [
@@ -196,8 +252,16 @@ def demo_data(case_number):
         "activities_truncated": False, "activities_error": None,
         # Shows off the Dev tab's "Related links" grid (a PR attached
         # directly in CRM, not just pasted into free text -- see
-        # crm_scrape.get_related_links). Points at the same PR #88 as the
-        # demo branches/pull_requests below for a consistent demo story.
+        # crm_scrape.get_related_links). A *different* PR (#88) than the
+        # demo branches/pull_requests below (#91) -- on purpose: those two
+        # sections must never show the same PR twice (see
+        # run_ado_lookup/_related_link_refs, which excludes anything
+        # related_links already covers from what gets resolved into
+        # branches/pull_requests). --demo bypasses run_ado_lookup entirely
+        # (no real API calls), so unlike a real run this dedup doesn't run
+        # here -- these two lists are just kept deliberately non-
+        # overlapping by hand instead, so the demo doesn't visually
+        # reintroduce the very duplication that dedup exists to prevent.
         "related_links": [
             {"name": "PR 88 ✅ (CU-DEMO)",
              "url": "https://dev.azure.com/example/proj/_git/invoicing-service/pullrequest/88",
@@ -211,9 +275,9 @@ def demo_data(case_number):
          "clone_url": "https://dev.azure.com/example/proj/_git/invoicing-service"},
     ]
     pull_requests = [
-        {"project": "proj", "id": 88, "repo": "invoicing-service", "title": "Fix dimension check on partial posting (12345)",
+        {"project": "proj", "id": 91, "repo": "invoicing-service", "title": "Add dimension default fallback (12345)",
          "status": "active", "created_by": "Jane Doe",
-         "url": "https://dev.azure.com/example/proj/_git/invoicing-service/pullrequest/88",
+         "url": "https://dev.azure.com/example/proj/_git/invoicing-service/pullrequest/91",
          "clone_url": "https://dev.azure.com/example/proj/_git/invoicing-service"},
     ]
     return crm_results, branches, pull_requests
@@ -235,6 +299,20 @@ def run_crm_lookup(case_number):
     page = DataverseApiPage(CRM_ORIGIN, token)
     print(f"Looking up case {case_number} via the Dataverse Web API (OAuth)...")
     return [crm_scrape.lookup_by_ticket(page, case_number, TICKET_FIELD)]
+
+
+def list_relevant_cases():
+    """Every currently-unassigned CRM case (crm_scrape.list_new_cases), via
+    the same OAuth-authenticated Dataverse connection as run_crm_lookup.
+    Used by case-getter (../case-getter/case_getter.py) to find work to
+    brief/guide -- case-brief's own CLI never calls this, it only ever
+    looks up one case by ticket number.
+
+    Returns (cases, error, truncated) -- see crm_scrape.list_new_cases.
+    """
+    token = dataverse_auth.get_access_token()
+    page = DataverseApiPage(CRM_ORIGIN, token)
+    return crm_scrape.list_new_cases(page)
 
 
 def build_parser():
@@ -303,6 +381,9 @@ def main():
             case_number, crm_results, branches, pull_requests,
             ado_error=ado_error, ado_note=ado_note,
         )
+        # Image attachments only -- text ones are already inlined directly
+        # into `markdown` above (see report._note_attachment_lines).
+        attachments = report.collect_attachments(case_number, crm_results)
         progress_success("Brief markdown built")
 
         progress("Writing to file...", status="running")
@@ -310,6 +391,7 @@ def main():
             markdown,
             os.path.join(HERE, OUTPUT_DIR),
             case_number,
+            attachments=attachments,
         )
         progress_success("Brief complete", f"Written to {path}")
 
