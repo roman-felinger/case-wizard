@@ -9,6 +9,7 @@ guess presented as certain, a stray `_comment` leaking into a request dict).
 Run with: python -m unittest discover -s tests   (from case-guide/)
       or: python -m pytest tests                 (if pytest is installed)
 """
+import json
 import os
 import sys
 import tempfile
@@ -106,6 +107,41 @@ class FindExampleGuideTests(unittest.TestCase):
         self._write("case-T1.md", "irrelevant")
         result = cg.find_example_guide(self.output_dir, "case-T2.md", count=0)
         self.assertIsNone(result)
+
+
+class LoadConfigTests(unittest.TestCase):
+    """DEFAULTS -> config.json (deep-merged, _comment stripped) -- the
+    actual load_config integration, not just deep_merge/strip_comments as
+    standalone units (see StripCommentsTests below for the latter)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.config_path = os.path.join(self.tmp.name, "config.json")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write(self, data):
+        with open(self.config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+    def test_missing_config_file_falls_back_to_defaults_only(self):
+        cfg = cg.load_config(os.path.join(self.tmp.name, "nonexistent.json"))
+        self.assertEqual(cfg, cg.DEFAULTS)
+
+    def test_config_json_deep_merges_into_nested_defaults_without_clobbering_siblings(self):
+        self._write({"azure_devops": {"org_url": "https://dev.azure.com/acme"}})
+        cfg = cg.load_config(self.config_path)
+        self.assertEqual(cfg["azure_devops"]["org_url"], "https://dev.azure.com/acme")
+        self.assertIsNone(cfg["azure_devops"]["project"])  # sibling default kept
+        self.assertEqual(cfg["claude"]["agent"], "case-guide-writer")  # untouched branch kept
+
+    def test_comment_keys_are_stripped_through_the_real_load_path(self):
+        self._write({"_comment": "docs", "claude": {"_comment": "x", "model": "opus"}})
+        cfg = cg.load_config(self.config_path)
+        self.assertNotIn("_comment", cfg)
+        self.assertNotIn("_comment", cfg["claude"])
+        self.assertEqual(cfg["claude"]["model"], "opus")
 
 
 class StripCommentsTests(unittest.TestCase):
@@ -217,6 +253,58 @@ class GatherAdoDetailAuthErrorTests(unittest.TestCase):
         self.assertIn("403", error)
 
 
+class GatherAdoDetailDegradeTests(unittest.TestCase):
+    """The actual point of _enrich_branch/_enrich_pr -- a non-auth failure
+    enriching one branch/PR must not sink the whole (possibly concurrent)
+    pass, unlike the hard-fail AdoAuthError cases above."""
+
+    def test_no_org_url_configured_returns_a_clear_error_without_searching(self):
+        cfg = {"azure_devops": {"org_url": None}}
+        with mock.patch.object(cg.ado_api, "open_session") as open_session:
+            detail, error = cg.gather_ado_detail(cfg, "T1")
+        open_session.assert_not_called()
+        self.assertIsNone(detail)
+        self.assertIn("no Azure DevOps org URL configured", error)
+
+    def test_a_branch_enrichment_failure_still_returns_the_branch_with_a_warning(self):
+        cfg = {"azure_devops": {"org_url": "https://dev.azure.com/org"}}
+        branch = {"project": "P", "repo": "R", "branch": "b"}
+        with mock.patch.object(cg.ado_api, "open_session", return_value=mock.Mock()), \
+             mock.patch.object(cg.ado_api, "find_related", return_value=([branch], [], [])), \
+             mock.patch.object(cg.ado_api, "get_branch_commits", side_effect=RuntimeError("HTTP 500")):
+            detail, error = cg.gather_ado_detail(cfg, "T1")
+        self.assertIsNone(error)
+        self.assertEqual(len(detail["branches"]), 1)
+        self.assertEqual(detail["branches"][0]["commits"], [])
+        self.assertTrue(any("couldn't fetch commits" in w for w in detail["warnings"]))
+
+    def test_a_pr_enrichment_failure_still_returns_the_pr_with_a_warning(self):
+        cfg = {"azure_devops": {"org_url": "https://dev.azure.com/org"}}
+        pr = {"project": "P", "repo": "R", "id": 5}
+        with mock.patch.object(cg.ado_api, "open_session", return_value=mock.Mock()), \
+             mock.patch.object(cg.ado_api, "find_related", return_value=([], [pr], [])), \
+             mock.patch.object(cg.ado_api, "get_pr_details", side_effect=RuntimeError("HTTP 500")):
+            detail, error = cg.gather_ado_detail(cfg, "T1")
+        self.assertIsNone(error)
+        self.assertEqual(len(detail["pull_requests"]), 1)
+        self.assertEqual(detail["pull_requests"][0]["commits"], [])
+        self.assertTrue(any("couldn't fetch detail for PR" in w for w in detail["warnings"]))
+
+    def test_successful_enrichment_merges_commits_and_pr_extras_in(self):
+        cfg = {"azure_devops": {"org_url": "https://dev.azure.com/org"}}
+        branch = {"project": "P", "repo": "R", "branch": "b"}
+        pr = {"project": "P", "repo": "R", "id": 5}
+        with mock.patch.object(cg.ado_api, "open_session", return_value=mock.Mock()), \
+             mock.patch.object(cg.ado_api, "find_related", return_value=([branch], [pr], [])), \
+             mock.patch.object(cg.ado_api, "get_branch_commits", return_value=["c1"]), \
+             mock.patch.object(cg.ado_api, "get_pr_details", return_value={"files": ["f1"], "comments": []}):
+            detail, error = cg.gather_ado_detail(cfg, "T1")
+        self.assertIsNone(error)
+        self.assertEqual(detail["branches"][0]["commits"], ["c1"])
+        self.assertEqual(detail["pull_requests"][0]["files"], ["f1"])
+        self.assertEqual(detail["warnings"], [])
+
+
 class ResolveExtraArgsTests(unittest.TestCase):
     """_resolve_extra_args is the one exception to "CLI flags always win"
     (see CLAUDE.md): --no-claude-extra-args has to be able to express "zero
@@ -313,6 +401,32 @@ class BuildPromptDifficultyRubricTests(unittest.TestCase):
         prompt = self._prompt()
         self.assertIn("**Ready for Implementation:** Yes", prompt)
         self.assertIn("Before You Start -- Social Steps", prompt)
+
+
+class LooksLikeGuideTests(unittest.TestCase):
+    """Same warn-only pattern as HasDifficultyRatingTests/HasReadinessMarkerTests
+    below -- a loose sanity check that claude's output is the guide itself,
+    not a refusal or stray preamble."""
+
+    def test_true_for_a_leading_heading_mentioning_the_case_number(self):
+        text = "# Case T2611845\n\n## What this case is about\nSomething.\n"
+        self.assertTrue(cg._looks_like_guide(text, "T2611845"))
+
+    def test_false_when_there_is_no_leading_heading_at_all(self):
+        text = "Sure, here's the guide for T2611845:\n\n## What this case is about\n"
+        self.assertFalse(cg._looks_like_guide(text, "T2611845"))
+
+    def test_false_when_the_case_number_never_appears_at_all(self):
+        text = "# Implementation Guide\n\nSomething about a different case entirely.\n"
+        self.assertFalse(cg._looks_like_guide(text, "T2611845"))
+
+    def test_matching_is_case_insensitive(self):
+        text = "# case t2611845\n"
+        self.assertTrue(cg._looks_like_guide(text, "T2611845"))
+
+    def test_a_case_number_past_the_first_200_characters_does_not_count(self):
+        text = "# " + ("x" * 250) + " T2611845\n"
+        self.assertFalse(cg._looks_like_guide(text, "T2611845"))
 
 
 class HasDifficultyRatingTests(unittest.TestCase):

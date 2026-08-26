@@ -59,6 +59,16 @@ class BestFuzzyMatchTests(unittest.TestCase):
         result = repo_suggest.best_fuzzy_match("Zzyzx Corp", ["Contoso", "Fabrikam"])
         self.assertIsNone(result)
 
+    def test_czech_corp_suffixes_are_ignored_when_matching(self):
+        # This codebase's own CRM data uses Czech legal-entity suffixes
+        # (see test_case_guide.py's ExtractFromBriefTests, "Contoso s.r.o.")
+        # -- a bug in that branch of _CORP_SUFFIXES would silently make a
+        # real customer name score worse than it should.
+        result = repo_suggest.best_fuzzy_match("Contoso s.r.o.", ["Contoso", "Fabrikam"])
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0], "Contoso")
+        self.assertEqual(result[1], 1.0)  # normalized names are an exact match
+
     def test_empty_candidate_list_returns_none(self):
         self.assertIsNone(repo_suggest.best_fuzzy_match("Contoso", []))
 
@@ -106,6 +116,33 @@ class ResolveSuggestedReposTests(unittest.TestCase):
         api = FakeAdoApi(list_projects=RuntimeError("boom"))
         result = repo_suggest.resolve_suggested_repos(api, self._azure_cfg(), "Acme Corp")
         self.assertEqual(result, [])
+
+    def test_repo_listing_failure_after_a_matched_project_degrades_to_empty_list(self):
+        # Same degrade-to-[] behavior as the project-listing failure above,
+        # one call later -- a repo-listing failure after a project was
+        # already matched must not crash either.
+        api = FakeAdoApi(list_projects=(["Acme Corp"], False), list_repos=RuntimeError("boom"))
+        result = repo_suggest.resolve_suggested_repos(api, self._azure_cfg(), "Acme Corp")
+        self.assertEqual(result, [])
+
+    def test_matched_project_with_zero_repos_returns_empty_list(self):
+        api = FakeAdoApi(list_projects=(["Acme Corp"], False), list_repos=[])
+        result = repo_suggest.resolve_suggested_repos(api, self._azure_cfg(), "Acme Corp")
+        self.assertEqual(result, [])
+
+    def test_a_repo_name_that_clearly_matches_the_customer_is_picked_over_its_siblings(self):
+        # Distinct from test_single_repo_in_matched_project_is_returned_directly
+        # (only one repo exists at all) and
+        # test_ambiguous_repo_within_a_matched_project_lists_all_rather_than_guessing
+        # (no repo stands out) -- this is the third, real branch: several
+        # repos in the matched project, but one of them clearly fuzzy-matches
+        # the customer name on its own.
+        repos = [{"name": "acme-billing", "remoteUrl": "https://x/billing"},
+                 {"name": "unrelated-tool", "remoteUrl": "https://x/unrelated"}]
+        api = FakeAdoApi(list_projects=(["Acme Corp"], False), list_repos=repos)
+        result = repo_suggest.resolve_suggested_repos(api, self._azure_cfg(), "Acme Corp")
+        self.assertEqual(result, [{"project": "Acme Corp", "repo": "acme-billing",
+                                    "clone_url": "https://x/billing", "source": "auto-match"}])
 
 
 class MergeConfirmedAndGuessedTests(unittest.TestCase):
