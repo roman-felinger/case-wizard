@@ -541,9 +541,8 @@ repo, plus edge cases like merge conflicts or missing tools) hasn't happened yet
 2. Social readiness gate — stop here if the guide says a developer can't start
    alone yet (see "Social readiness gate" below)
 3. Extract repo suggestion (`git clone` link in guide text)
-4. Prompt for repo URL (suggest from guide, ask user to confirm/override; `--yes`
-   requires `--repo` explicitly rather than guessing, since a non-interactive caller
-   has no terminal to answer a prompt with)
+4. Prompt for repo URL (suggest from guide, ask user to confirm/override — always
+   interactive; see "No non-interactive escape hatch" below)
 5. Workspace setup — clone/fetch, create `case/<case-number>` branch
 6. Install dependencies — auto-detect Python/Node/Rust/.NET
 7. Implementation — Claude reads guide + repo structure, generates a plan, then
@@ -570,14 +569,25 @@ the marker regex itself in sync between the two if the wording ever changes) and
 on No, `main` stops immediately -- before even resolving/prompting for a repo --
 printing the reason and pointing at the guide's own Social Steps section, rather
 than setting up a workspace and cloning a repo for work a developer can't start
-yet. `--ignore-readiness` overrides it for when those steps have actually been
-done since the guide was written; `--yes` (skips the interactive confirmation)
-deliberately does NOT also imply this -- they answer different questions. A guide
-with no readiness marker at all (an older guide, or `claude` dropped the line
-despite the prompt asking for it) is treated as ready, matching case-guide's own
-`_has_readiness_marker` warning, which already tells the operator to double-check
-by hand in that case rather than this gate additionally hard-blocking a case that
-may well be fine to start.
+yet. **No override flag** (`--ignore-readiness` was considered and removed
+2026-08-26 at the user's request -- see "No non-interactive escape hatch" below):
+if the gate fires on a case that's actually fine, the fix is to correct the guide
+(or re-run case-guide) and re-run case-solve, not to force past it from the CLI. A
+guide with no readiness marker at all (an older guide, or `claude` dropped the
+line despite the prompt asking for it) is treated as ready, matching case-guide's
+own `_has_readiness_marker` warning, which already tells the operator to
+double-check by hand in that case rather than this gate additionally
+hard-blocking a case that may well be fine to start.
+
+**No non-interactive escape hatch (2026-08-26).** case-solve originally had a
+`--yes` flag (skip the interactive repo/confirmation prompts, for a scripted
+caller) alongside `--ignore-readiness`. Both were removed at the user's explicit
+request -- case-solve is interactive-only now, full stop: `main` always calls
+`prompt_for_repo`/`confirm_before_implementing` (unless `--repo` is given, which
+still only skips the repo prompt, not the confirmation one) and always honors the
+readiness gate with no bypass. A caller that needs to drive case-solve
+non-interactively has no supported way to do so today -- that's a deliberate gap,
+not an oversight, until/unless asked for again.
 
 **Two-stage Claude interaction (plan → steps → apply)**, not one shot: guards
 against silent truncation on complex repos, lets you visually inspect steps before

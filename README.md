@@ -152,14 +152,16 @@ python case-solve/case_solve.py -h
 ```
 
 Requires the guide from case-guide, `claude` CLI (logged in), git, and network access
-to clone the repo. `--yes` skips the repo/confirmation prompts (required for any
-scripted/non-interactive caller). Optional `config.json` (see
+to clone the repo. Interactive-only — always prompts for the repo URL (unless
+`--repo` is given) and always asks you to confirm before touching anything; there's
+no flag to skip either prompt. Optional `config.json` (see
 `case-solve/config.example.json`) for `run_tests`/`run_lint`/`run_build`/`claude.*`.
 
 If the guide says the case isn't ready for a developer to start alone yet (waiting
 on a customer reply, a manager sign-off, etc.), case-solve stops before touching
-anything and points you at the guide's own "Before You Start" section — pass
-`--ignore-readiness` once that's actually been resolved.
+anything and points you at the guide's own "Before You Start" section — there's no
+flag to override this either; fix the guide (or re-run case-guide) and re-run
+case-solve once it's actually resolved.
 
 Auto-detected per project:
 

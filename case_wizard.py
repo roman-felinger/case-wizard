@@ -14,9 +14,9 @@ another -- no shared code, nothing changes about the three stages being
 independent. Each stage already reads the previous one's output straight off
 disk (guide reads case-brief's .md, solve reads case-guide's .md), so
 chaining needs nothing more than calling them in order. A failed stage stops
-the chain (later stages need its output). Interactive prompts (case-solve's
-repo/confirm prompts if you skip --repo / --solve-arg=--yes) still work --
-stdin/stdout are inherited, not captured.
+the chain (later stages need its output). case-solve is interactive-only (repo/
+confirm prompts, no flag to skip either) -- stdin/stdout are inherited, not
+captured, so those prompts still work when chained through `all`.
 
 `--demo` works for every stage, without a case number:
   - brief has its own real --demo flag (fake CRM/ADO data) -- forwarded as-is.
@@ -40,7 +40,6 @@ Examples:
 
     python case_wizard.py all T2611845 --repo <url>              # full chain
     python case_wizard.py all T2611845 --stop-after guide        # brief + guide only
-    python case_wizard.py all T2611845 --repo <url> --solve-arg --yes
 
     python case_wizard.py getter                                  # brief+guide every new, unassigned case
     python case_wizard.py getter --dry-run                        # just list them

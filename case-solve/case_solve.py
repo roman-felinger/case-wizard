@@ -263,19 +263,6 @@ def build_parser():
         action="store_true",
         help="Don't commit or modify anything (inspect changes only)",
     )
-    modes.add_argument(
-        "--yes",
-        action="store_true",
-        help="Skip the interactive yes/no confirmation before making changes "
-             "(for scripted/non-interactive callers)",
-    )
-    modes.add_argument(
-        "--ignore-readiness",
-        action="store_true",
-        help="Implement even if the guide's \"Ready for Implementation\" line says No "
-             "(use once its \"Before You Start -- Social Steps\" have actually been done)",
-    )
-
     # Verification
     verify = parser.add_argument_group("verification (auto-detect, can override)")
     verify.add_argument(
@@ -317,40 +304,28 @@ def main():
     # Social readiness gate: a guide can say a developer can't start alone
     # yet (needs a customer reply, a manager sign-off, ...) -- see
     # case_guide.py's "Readiness check". Stop here, before even asking for a
-    # repo, rather than setting up a workspace for work that can't start.
+    # repo, rather than setting up a workspace for work that can't start. No
+    # override flag -- if this fires on a case that's actually fine, fix the
+    # guide (or re-run case-guide) rather than forcing case-solve past it.
     ready, reason = check_readiness(guide_text)
-    if not ready and not args.ignore_readiness:
+    if not ready:
         print("\n" + "=" * 70)
         print("NOT READY FOR IMPLEMENTATION")
         print("=" * 70)
         print(f"\nThe guide marks this case as not ready: {reason or 'no reason given'}")
         print(f"See \"## Before You Start -- Social Steps\" in {guide_path} for what to do first.")
-        print("\nOnce that's resolved, re-run with --ignore-readiness to proceed anyway.")
+        print("\nRe-run case-solve once that's resolved.")
         return 1
 
     # Resolve repo URL
     suggested_repo = extract_repo_suggestion(guide_text)
-    if not args.repo:
-        if args.yes:
-            # --yes implies a non-interactive caller - input() would hang
-            # forever (or crash on EOF) waiting for a terminal that isn't
-            # there. Require --repo explicitly instead of guessing.
-            if not suggested_repo:
-                sys.exit("--yes requires --repo (no repo URL found in the guide to fall back on)")
-            repo_url = suggested_repo
-        else:
-            repo_url = prompt_for_repo(suggested_repo)
-    else:
-        repo_url = args.repo
+    repo_url = args.repo or prompt_for_repo(suggested_repo)
     print(f"✓ Using repo: {repo_url}")
 
     # Confirm before making changes
     branch_name = f"case/{args.case_number}"
-    if not args.yes:
-        if not confirm_before_implementing(args.case_number, repo_url, branch_name):
-            return 1  # User cancelled
-    else:
-        print(f"\n✓ Proceeding without confirmation (--yes): {branch_name} in {extract_repo_name(repo_url)}")
+    if not confirm_before_implementing(args.case_number, repo_url, branch_name):
+        return 1  # User cancelled
 
     # Import heavy modules here (after arg parsing, config loading)
     from lib.workspace import WorkspaceManager

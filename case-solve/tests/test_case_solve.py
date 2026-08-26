@@ -5,12 +5,11 @@ safety (mirrors case-guide's FindBriefTests pattern), repo-URL extraction
 from freeform guide text, repo-name extraction across GitHub/ADO/GitLab URL
 shapes, and filename sanitization.
 
-The highest-value coverage here is the `--yes` non-interactive path added
-this session: case_solve.main() must NEVER call input() when --yes is set,
-whether a repo is given explicitly, falls back to a guide-extracted
-suggestion, or (with neither) exits with a clear error instead of hanging.
-We prove "never calls input()" by patching builtins.input to raise if
-invoked at all, not just by checking the return value.
+case-solve is interactive-only -- no --yes/--ignore-readiness escape hatch
+of any kind (removed 2026-08-26; the user didn't want either). Every main()
+test below that reaches the repo-URL/confirmation prompts drives them
+through a scripted builtins.input, proving the interactive path is always
+taken rather than skipped.
 
 Deliberately not exhaustive over the full happy-path pipeline (workspace
 setup -> implement -> verify -> commit -> report) -- that orchestration is
@@ -43,8 +42,6 @@ def _args(**overrides):
         show_plan=False,
         no_implement=False,
         dry_run=False,
-        yes=False,
-        ignore_readiness=False,
         skip_tests=False,
         skip_lint=False,
         skip_build=False,
@@ -301,23 +298,57 @@ class FindGuideTests(unittest.TestCase):
             os.unlink(outside.name)
 
 
-class YesFlagNonInteractiveTests(unittest.TestCase):
-    """The --yes flag exists specifically so a non-interactive caller (e.g.
-    case-wizard's Streamlit UI running this as a subprocess) never hangs on
-    input(). Each test patches builtins.input to raise AssertionError if
-    called at all -- proving it, not just checking outcomes."""
+class PromptForRepoTests(unittest.TestCase):
+    def test_returns_typed_url(self):
+        with mock.patch("builtins.input", return_value="https://github.com/acme/typed.git"):
+            self.assertEqual(cs.prompt_for_repo(), "https://github.com/acme/typed.git")
 
-    def _run_main(self, argv, guide_text, input_mock=None):
+    def test_empty_input_falls_back_to_suggestion(self):
+        with mock.patch("builtins.input", return_value=""):
+            self.assertEqual(
+                cs.prompt_for_repo("https://github.com/acme/suggested.git"),
+                "https://github.com/acme/suggested.git",
+            )
+
+    def test_reprompts_until_non_empty_when_no_suggestion(self):
+        answers = iter(["", "", "https://github.com/acme/eventually.git"])
+        with mock.patch("builtins.input", side_effect=lambda prompt="": next(answers)):
+            self.assertEqual(cs.prompt_for_repo(), "https://github.com/acme/eventually.git")
+
+
+class ConfirmBeforeImplementingTests(unittest.TestCase):
+    def test_yes_returns_true(self):
+        with mock.patch("builtins.input", return_value="yes"):
+            self.assertTrue(
+                cs.confirm_before_implementing("T1", "https://github.com/acme/widgets.git", "case/T1")
+            )
+
+    def test_no_returns_false(self):
+        with mock.patch("builtins.input", return_value="no"):
+            self.assertFalse(
+                cs.confirm_before_implementing("T1", "https://github.com/acme/widgets.git", "case/T1")
+            )
+
+    def test_reprompts_on_unrecognized_input(self):
+        answers = iter(["maybe", "y"])
+        with mock.patch("builtins.input", side_effect=lambda prompt="": next(answers)):
+            self.assertTrue(
+                cs.confirm_before_implementing("T1", "https://github.com/acme/widgets.git", "case/T1")
+            )
+
+
+class InteractivePathTests(unittest.TestCase):
+    """case-solve is interactive-only -- no --yes/--ignore-readiness escape
+    hatch of any kind (removed 2026-08-26). Every main() run resolves the
+    repo URL and confirms before making changes via input(); these drive
+    that sequence with a scripted builtins.input rather than skipping it."""
+
+    def _run_main(self, argv, guide_text, input_mock):
         fake_guide_path = Path("guides") / "guide-T1.md"
         mock_workspace = mock.Mock(repo_dir="C:/fake/repo", branch_name="case/T1")
         mock_wm_instance = mock.Mock()
         mock_wm_instance.setup.return_value = mock_workspace
         mock_wm_cls = mock.Mock(return_value=mock_wm_instance)
-
-        if input_mock is None:
-            input_mock = mock.Mock(
-                side_effect=AssertionError("input() must never be called under --yes")
-            )
 
         with mock.patch.object(sys, "argv", ["case_solve.py"] + argv), \
              mock.patch("case_solve.shutil.which", side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None), \
@@ -328,51 +359,19 @@ class YesFlagNonInteractiveTests(unittest.TestCase):
             result = cs.main()
         return result, mock_wm_cls, input_mock
 
-    def test_yes_with_explicit_repo_never_calls_input(self):
+    def test_repo_flag_given_still_asks_for_confirmation(self):
+        input_mock = mock.Mock(return_value="yes")
         result, mock_wm_cls, input_mock = self._run_main(
-            ["T1", "--yes", "--repo", "https://github.com/acme/widgets.git", "--no-implement"],
+            ["T1", "--repo", "https://github.com/acme/widgets.git", "--no-implement"],
             guide_text="No clone instructions here.",
+            input_mock=input_mock,
         )
         self.assertEqual(result, 0)
-        input_mock.assert_not_called()
+        input_mock.assert_called_once()  # --repo given, so only the confirmation prompt fires
         _, kwargs = mock_wm_cls.call_args
         self.assertEqual(kwargs["repo_url"], "https://github.com/acme/widgets.git")
 
-    def test_yes_falls_back_to_guide_suggested_repo_when_no_repo_flag(self):
-        guide_text = "## Get set up\n\ngit clone https://github.com/acme/fallback.git\n"
-        result, mock_wm_cls, input_mock = self._run_main(
-            ["T1", "--yes", "--no-implement"],
-            guide_text=guide_text,
-        )
-        self.assertEqual(result, 0)
-        input_mock.assert_not_called()
-        _, kwargs = mock_wm_cls.call_args
-        self.assertEqual(kwargs["repo_url"], "https://github.com/acme/fallback.git")
-
-    def test_yes_without_repo_or_suggestion_raises_system_exit(self):
-        fake_guide_path = Path("guides") / "guide-T1.md"
-        input_mock = mock.Mock(
-            side_effect=AssertionError("input() must never be called under --yes")
-        )
-        with mock.patch.object(
-            sys, "argv", ["case_solve.py", "T1", "--yes", "--no-implement"]
-        ), mock.patch(
-            "case_solve.shutil.which", side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None
-        ), mock.patch(
-            "case_solve.find_guide", return_value=fake_guide_path
-        ), mock.patch(
-            "case_solve.read_guide", return_value="No clone instructions anywhere."
-        ), mock.patch(
-            "builtins.input", input_mock
-        ):
-            with self.assertRaises(SystemExit) as ctx:
-                cs.main()
-        self.assertIn("--yes requires --repo", str(ctx.exception))
-        input_mock.assert_not_called()
-
-    def test_without_yes_the_interactive_path_still_prompts_as_before(self):
-        # Contrast case: confirms we didn't accidentally remove the
-        # interactive path while adding --yes. input() IS expected here.
+    def test_no_repo_flag_prompts_for_one_then_confirms(self):
         answers = iter(["https://github.com/acme/typed.git", "yes"])
         input_mock = mock.Mock(side_effect=lambda prompt="": next(answers))
         result, mock_wm_cls, _ = self._run_main(
@@ -399,21 +398,23 @@ class YesFlagNonInteractiveTests(unittest.TestCase):
 class ReadinessGateTests(unittest.TestCase):
     """The social readiness gate must stop main() before it even asks for a
     repo -- there's no point setting up a workspace for work a developer
-    can't start yet. Each test patches builtins.input to raise if called at
-    all, proving the not-ready path never reaches the interactive prompt
-    either (same style as YesFlagNonInteractiveTests)."""
+    can't start yet -- and there's no flag to bypass it (--ignore-readiness
+    was removed 2026-08-26; see NoBypassFlagTests below). Each not-ready
+    test patches builtins.input to raise if called at all, proving the gate
+    stops the run before any interactive prompt."""
 
     NOT_READY_TEXT = (
         "# Case T1\n\n**Ready for Implementation:** No -- waiting on customer reply\n\n"
         "## Before You Start -- Social Steps\n\n1. Ask the customer to confirm X.\n"
     )
 
-    def _run_main(self, argv, guide_text):
+    def _run_main(self, argv, guide_text, input_mock=None):
         fake_guide_path = Path("guides") / "guide-T1.md"
         mock_wm_cls = mock.Mock()
-        input_mock = mock.Mock(
-            side_effect=AssertionError("input() must never be called once the gate stops the run")
-        )
+        if input_mock is None:
+            input_mock = mock.Mock(
+                side_effect=AssertionError("input() must never be called once the gate stops the run")
+            )
         with mock.patch.object(sys, "argv", ["case_solve.py"] + argv), \
              mock.patch("case_solve.shutil.which", side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None), \
              mock.patch("case_solve.find_guide", return_value=fake_guide_path), \
@@ -432,32 +433,30 @@ class ReadinessGateTests(unittest.TestCase):
         mock_wm_cls.assert_not_called()
         input_mock.assert_not_called()
 
-    def test_not_ready_guide_stops_even_under_yes(self):
-        # --yes only skips the confirmation prompt -- it must not also
-        # bypass the readiness gate.
-        result, mock_wm_cls, _ = self._run_main(
-            ["T1", "--yes", "--repo", "https://github.com/acme/widgets.git"],
-            guide_text=self.NOT_READY_TEXT,
-        )
-        self.assertEqual(result, 1)
-        mock_wm_cls.assert_not_called()
-
-    def test_ignore_readiness_proceeds_past_a_not_ready_guide(self):
-        result, mock_wm_cls, _ = self._run_main(
-            ["T1", "--yes", "--ignore-readiness", "--repo",
-             "https://github.com/acme/widgets.git", "--no-implement"],
-            guide_text=self.NOT_READY_TEXT,
-        )
-        self.assertEqual(result, 0)
-        mock_wm_cls.assert_called_once()
-
     def test_ready_guide_is_unaffected(self):
+        input_mock = mock.Mock(return_value="yes")
         result, mock_wm_cls, _ = self._run_main(
-            ["T1", "--yes", "--repo", "https://github.com/acme/widgets.git", "--no-implement"],
+            ["T1", "--repo", "https://github.com/acme/widgets.git", "--no-implement"],
             guide_text="**Ready for Implementation:** Yes\n",
+            input_mock=input_mock,
         )
         self.assertEqual(result, 0)
         mock_wm_cls.assert_called_once()
+
+
+class NoBypassFlagTests(unittest.TestCase):
+    """Locks in that --yes and --ignore-readiness are gone entirely (removed
+    2026-08-26 at the user's request) -- not just unused, genuinely absent
+    from the parser, so neither can be typed by mistake and silently do
+    nothing."""
+
+    def test_yes_is_not_a_recognized_flag(self):
+        with self.assertRaises(SystemExit):
+            cs.build_parser().parse_args(["T1", "--yes"])
+
+    def test_ignore_readiness_is_not_a_recognized_flag(self):
+        with self.assertRaises(SystemExit):
+            cs.build_parser().parse_args(["T1", "--ignore-readiness"])
 
 
 class MainModeFlagsTests(unittest.TestCase):
@@ -495,13 +494,16 @@ class MainModeFlagsTests(unittest.TestCase):
              mock.patch("lib.implementer.Implementer", mock_implementer_cls), \
              mock.patch("lib.verifier.Verifier", mock_verifier_cls), \
              mock.patch("lib.committer.Committer", mock_committer_cls), \
-             mock.patch("lib.report.ReportGenerator", mock_report_cls):
+             mock.patch("lib.report.ReportGenerator", mock_report_cls), \
+             mock.patch("builtins.input", return_value="yes"):
+            # --repo is always given in this class's argv, so the only
+            # interactive prompt reached is the confirmation -- "yes" covers it.
             result = cs.main()
         return result, mock_implementer_instance, mock_verifier_cls, mock_committer_cls, mock_report_cls
 
     def test_show_plan_prints_the_plan_and_stops_before_implementing_anything(self):
         result, implementer, verifier_cls, committer_cls, report_cls = self._run_main(
-            ["T1", "--yes", "--repo", "https://github.com/acme/widgets.git", "--show-plan"]
+            ["T1", "--repo", "https://github.com/acme/widgets.git", "--show-plan"]
         )
         self.assertEqual(result, 0)
         implementer.generate_plan.assert_called_once()
@@ -512,7 +514,7 @@ class MainModeFlagsTests(unittest.TestCase):
 
     def test_dry_run_implements_but_skips_verify_commit_and_reports_no_results(self):
         result, implementer, verifier_cls, committer_cls, report_cls = self._run_main(
-            ["T1", "--yes", "--repo", "https://github.com/acme/widgets.git", "--dry-run"]
+            ["T1", "--repo", "https://github.com/acme/widgets.git", "--dry-run"]
         )
         self.assertEqual(result, 0)
         implementer.implement.assert_called_once()
@@ -527,7 +529,7 @@ class MainModeFlagsTests(unittest.TestCase):
         # Contrast case: confirms --dry-run's skip is opt-in, not the
         # default behavior.
         result, implementer, verifier_cls, committer_cls, report_cls = self._run_main(
-            ["T1", "--yes", "--repo", "https://github.com/acme/widgets.git"]
+            ["T1", "--repo", "https://github.com/acme/widgets.git"]
         )
         self.assertEqual(result, 0)
         implementer.implement.assert_called_once()
