@@ -189,6 +189,29 @@ class ExtractDifficultyTests(unittest.TestCase):
     def test_a_bare_rating_with_no_reason_text_has_no_trailing_dashes(self):
         self.assertEqual(cg._extract_difficulty("**Implementation Difficulty:** 2/10\n"), "2/10")
 
+    def test_an_em_dash_separator_is_consumed_not_doubled(self):
+        # A real bug: claude's prose defaults to a real em dash ("4/10 —
+        # reason") often enough that an ASCII-only "-{1,2}" class missed it
+        # entirely -- the em dash then fell into the reason capture and got
+        # reassembled as "4/10 -- — reason" (this function's own separator,
+        # plus claude's un-stripped one right after it).
+        self.assertEqual(
+            cg._extract_difficulty("**Implementation Difficulty:** 4/10 — single file, needs research.\n"),
+            "4/10 -- single file, needs research.",
+        )
+
+    def test_an_en_dash_separator_is_also_consumed(self):
+        self.assertEqual(
+            cg._extract_difficulty("**Implementation Difficulty:** 3/10 – en dash variant.\n"),
+            "3/10 -- en dash variant.",
+        )
+
+    def test_n_a_with_an_em_dash_separator_is_also_consumed(self):
+        self.assertEqual(
+            cg._extract_difficulty("**Implementation Difficulty:** N/A — automated notification.\n"),
+            "N/A -- automated notification.",
+        )
+
 
 class CaseToRowTests(unittest.TestCase):
     def setUp(self):
@@ -197,17 +220,18 @@ class CaseToRowTests(unittest.TestCase):
 
     def test_normalizes_a_raw_listing_entry_to_the_row_shape(self):
         c = {"ticket_number": "T1", "owned_by_me": True, "stale": True, "is_new": False,
-             "title": "A title", "customer": "Contoso"}
+             "title": "A title", "customer": "Contoso", "url": "https://crm.example/T1"}
         self.assertEqual(cg._case_to_row(c, guide_dir=self.tmp), {
             "case_number": "T1", "owned_by_me": True, "stale": True, "is_new": False,
             "title": "A title", "customer": "Contoso", "difficulty": None,
+            "url": "https://crm.example/T1",
         })
 
     def test_missing_optional_fields_come_back_none_or_a_default_not_a_crash(self):
         row = cg._case_to_row({"ticket_number": "T1"}, guide_dir=self.tmp)
         self.assertEqual(row, {
             "case_number": "T1", "owned_by_me": None, "stale": False, "is_new": True,
-            "title": None, "customer": None, "difficulty": None,
+            "title": None, "customer": None, "difficulty": None, "url": None,
         })
 
     def test_reads_difficulty_from_an_existing_guide_on_disk(self):
@@ -219,23 +243,6 @@ class CaseToRowTests(unittest.TestCase):
         c = {"ticket_number": "T1", "is_new": False, "stale": False}
         row = cg._case_to_row(c, guide_dir=self.tmp)
         self.assertEqual(row["difficulty"], "4/10 -- a few files, no new concepts.")
-
-
-class TagTests(unittest.TestCase):
-    def test_non_stale_case_renders_exactly_like_ownership_tag(self):
-        self.assertEqual(cg._tag({"owned_by_me": True}), "mine")
-        self.assertEqual(cg._tag({"owned_by_me": False}), "unassigned")
-
-    def test_stale_case_appends_stale(self):
-        self.assertEqual(cg._tag({"owned_by_me": True, "stale": True}), "mine, stale")
-        self.assertEqual(cg._tag({"owned_by_me": False, "stale": True}), "unassigned, stale")
-
-    def test_up_to_date_case_appends_up_to_date(self):
-        self.assertEqual(cg._tag({"owned_by_me": True, "is_new": False}), "mine, up to date")
-        self.assertEqual(cg._tag({"owned_by_me": False, "is_new": False}), "unassigned, up to date")
-
-    def test_stale_wins_over_up_to_date_if_somehow_both_set(self):
-        self.assertEqual(cg._tag({"owned_by_me": True, "stale": True, "is_new": False}), "mine, stale")
 
 
 class IsStaleTests(unittest.TestCase):
@@ -316,8 +323,15 @@ class BuildReportMarkdownTests(unittest.TestCase):
         rows = [{"case_number": "T1", "owned_by_me": True, "title": "A title",
                   "customer": "Contoso", "difficulty": "4/10 -- easy"}]
         md = cg.build_report_markdown(rows, dry_run=False, timestamp="2026-08-26 12:00:00")
-        self.assertIn("## T1 (mine)", md)
-        self.assertIn("**Difficulty:** 4/10 -- easy", md)
+        self.assertIn("| T1 |", md)
+        self.assertIn("Mine", md)
+        self.assertIn("4/10 -- easy", md)
+
+    def test_a_row_with_a_url_renders_the_case_number_as_a_link(self):
+        rows = [{"case_number": "T1", "owned_by_me": False, "title": "A title",
+                  "customer": "Contoso", "difficulty": "4/10 -- easy", "url": "https://crm.example/T1"}]
+        md = cg.build_report_markdown(rows, dry_run=False, timestamp="2026-08-26 12:00:00")
+        self.assertIn("[T1](https://crm.example/T1)", md)
 
     def test_an_error_row_is_called_out(self):
         rows = [{"case_number": "T1", "owned_by_me": False, "title": "A title",
@@ -331,14 +345,14 @@ class BuildReportMarkdownTests(unittest.TestCase):
         rows = [{"case_number": "T1", "owned_by_me": False, "title": "A title",
                   "customer": "Contoso", "difficulty": "4/10 -- easy", "is_new": False}]
         md = cg.build_report_markdown(rows, dry_run=True, timestamp="2026-08-26 12:00:00")
-        self.assertIn("**Difficulty:** 4/10 -- easy", md)
+        self.assertIn("4/10 -- easy", md)
         self.assertIn("dry run", md.lower())
 
     def test_dry_run_row_with_no_difficulty_yet_shows_the_placeholder(self):
         rows = [{"case_number": "T1", "owned_by_me": False, "title": "A title",
                   "customer": "Contoso", "difficulty": None, "is_new": True}]
         md = cg.build_report_markdown(rows, dry_run=True, timestamp="2026-08-26 12:00:00")
-        self.assertIn("not yet available", md)
+        self.assertIn("not generated this run", md)
 
 
 class WriteReportTests(unittest.TestCase):
@@ -358,13 +372,182 @@ class WriteReportTests(unittest.TestCase):
         self.assertTrue(os.path.isdir(missing))
 
 
-class OwnershipTagTests(unittest.TestCase):
-    def test_owned_by_me_true_is_tagged_mine(self):
-        self.assertEqual(cg._ownership_tag({"owned_by_me": True}), "mine")
+class OwnerLabelTests(unittest.TestCase):
+    def test_owned_by_me_true_is_mine(self):
+        self.assertEqual(cg._owner_label({"owned_by_me": True}), "Mine")
 
-    def test_owned_by_me_false_or_missing_is_tagged_unassigned(self):
-        self.assertEqual(cg._ownership_tag({"owned_by_me": False}), "unassigned")
-        self.assertEqual(cg._ownership_tag({}), "unassigned")
+    def test_owned_by_me_false_or_missing_is_unassigned(self):
+        self.assertEqual(cg._owner_label({"owned_by_me": False}), "Unassigned")
+        self.assertEqual(cg._owner_label({}), "Unassigned")
+
+
+class NeedsProcessingTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def test_a_new_case_needs_processing(self):
+        self.assertTrue(cg._needs_processing({"ticket_number": "T1", "is_new": True}, self.tmp))
+
+    def test_a_stale_case_needs_processing(self):
+        self.assertTrue(cg._needs_processing({"ticket_number": "T1", "stale": True}, self.tmp))
+
+    def test_a_fresh_brief_with_a_complete_existing_guide_does_not_need_processing(self):
+        with open(os.path.join(self.tmp, "guide-T1.md"), "w", encoding="utf-8") as f:
+            f.write(_guide())
+        c = {"ticket_number": "T1", "is_new": False, "stale": False}
+        self.assertFalse(cg._needs_processing(c, self.tmp))
+
+    def test_a_fresh_brief_with_no_guide_at_all_still_needs_processing(self):
+        # One bug this guards against: a brief that's up to date but was
+        # never followed by a case-guide run (e.g. created by hand, or by
+        # an older/failed run) used to look fully done forever, leaving the
+        # case stuck showing "(not found -- check the guide)" even though
+        # there's no guide file to check at all.
+        c = {"ticket_number": "T1", "is_new": False, "stale": False}
+        self.assertTrue(cg._needs_processing(c, self.tmp))
+
+    def test_a_guide_missing_the_difficulty_line_still_needs_processing(self):
+        # The other bug this guards against: a guide that genuinely exists
+        # but where claude dropped the difficulty line used to be
+        # indistinguishable from "done" -- it kept showing "(not found --
+        # check the guide)" in the triage list forever, with nothing ever
+        # trying to fix it.
+        with open(os.path.join(self.tmp, "guide-T1.md"), "w", encoding="utf-8") as f:
+            f.write("# Case T1\n\nNo difficulty line in here at all.\n")
+        c = {"ticket_number": "T1", "is_new": False, "stale": False}
+        self.assertTrue(cg._needs_processing(c, self.tmp))
+
+
+class DifficultyPlaceholderTests(unittest.TestCase):
+    def test_dry_run_says_not_generated(self):
+        self.assertIn("dry run", cg._difficulty_placeholder({}, dry_run=True))
+
+    def test_skipped_by_limit_says_so(self):
+        msg = cg._difficulty_placeholder({"skipped_limit": True}, dry_run=False)
+        self.assertIn("--limit", msg)
+
+    def test_a_row_with_an_error_shows_the_error_itself(self):
+        msg = cg._difficulty_placeholder({"error": "case-brief failed"}, dry_run=False)
+        self.assertEqual(msg, "⚠ case-brief failed")
+
+    def test_otherwise_says_to_check_the_guide(self):
+        msg = cg._difficulty_placeholder({}, dry_run=False)
+        self.assertIn("guide", msg)
+
+
+class TableRowsTests(unittest.TestCase):
+    def test_owner_is_its_own_column(self):
+        row = {"case_number": "T1", "owned_by_me": True,
+               "title": "A title", "customer": "Contoso", "difficulty": "4/10 -- easy"}
+        cells = cg._table_rows([row], dry_run=False)[0]
+        self.assertEqual(cells, ["T1", "Mine", "A title", "Contoso", "4/10 -- easy"])
+
+    def test_missing_fields_fall_back_to_placeholders(self):
+        cells = cg._table_rows([{"case_number": "T1"}], dry_run=True)[0]
+        self.assertEqual(cells, ["T1", "Unassigned", "(no title)", "unknown customer",
+                                  "(dry run -- not generated this run)"])
+
+    def test_error_is_surfaced_in_the_difficulty_column(self):
+        # No separate Notes column any more (it was almost always empty) --
+        # an error shows up as the Difficulty cell's own text instead.
+        row = {"case_number": "T1", "error": "case-brief failed (exit 1)"}
+        cells = cg._table_rows([row], dry_run=False)[0]
+        self.assertEqual(cells[-1], "⚠ case-brief failed (exit 1)")
+
+
+class FormatCaseLinesTests(unittest.TestCase):
+    def test_owner_is_its_own_labeled_line(self):
+        lines = cg._format_case_lines({"case_number": "T1", "owned_by_me": True}, dry_run=False)
+        self.assertIn("    Owner: Mine", lines)
+
+    def test_no_status_line_at_all(self):
+        # The Status column/line was dropped entirely -- it was almost
+        # always empty (only ever "Stale", and even that was rare).
+        lines = cg._format_case_lines({"case_number": "T1", "stale": True}, dry_run=False)
+        self.assertFalse(any(line.strip().startswith("Status:") for line in lines))
+
+    def test_error_shows_up_on_the_difficulty_line_not_a_separate_one(self):
+        lines = cg._format_case_lines({"case_number": "T1", "error": "boom"}, dry_run=False)
+        self.assertIn("    Difficulty: ⚠ boom", lines)
+        self.assertFalse(any(line.strip().startswith("⚠") for line in lines))
+
+    def test_no_table_syntax_leaks_into_plain_console_output(self):
+        lines = cg._format_case_lines({"case_number": "T1"}, dry_run=False)
+        self.assertFalse(any("|" in line for line in lines))
+
+
+class DifficultyBgTests(unittest.TestCase):
+    def test_no_rating_has_no_background(self):
+        self.assertIsNone(cg._difficulty_bg(None))
+
+    def test_easiest_is_the_green_end_of_the_scale(self):
+        self.assertEqual(cg._difficulty_bg(1), "#63be7b")
+
+    def test_hardest_is_the_red_end_of_the_scale(self):
+        self.assertEqual(cg._difficulty_bg(10), "#f8696b")
+
+    def test_out_of_range_values_are_clamped_not_extrapolated(self):
+        self.assertEqual(cg._difficulty_bg(1), cg._difficulty_bg(0))
+        self.assertEqual(cg._difficulty_bg(10), cg._difficulty_bg(99))
+
+
+class RenderMarkdownTableTests(unittest.TestCase):
+    def _render(self, rows, mine_flags, difficulty_nums, urls=None):
+        return cg._render_markdown_table(
+            cg._TABLE_HEADERS, rows, mine_flags, difficulty_nums,
+            urls if urls is not None else [None] * len(rows),
+        )
+
+    def test_renders_an_ordinary_pipe_table(self):
+        rows = [["T1", "Unassigned", "t", "c", ""]]
+        out = self._render(rows, [False], [None])
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "| " + " | ".join(cg._TABLE_HEADERS) + " |")
+        self.assertTrue(lines[1].startswith("| ---"))
+        self.assertIn("| T1 | Unassigned |", lines[2])
+
+    def test_difficulty_cell_carries_a_background_span(self):
+        rows = [["T1", "Mine", "t", "c", "2/10 -- easy"]]
+        out = self._render(rows, [True], [2])
+        self.assertIn(f'<span style="background:{cg._difficulty_bg(2)}', out)
+        self.assertIn("2/10 -- easy</span>", out)
+
+    def test_mine_row_bolds_the_owner_cell_unassigned_does_not(self):
+        rows = [["T1", "Mine", "t", "c", ""], ["T2", "Unassigned", "t", "c", ""]]
+        out = self._render(rows, [True, False], [None, None])
+        lines = out.splitlines()
+        mine_row = next(l for l in lines if l.startswith("| T1 "))
+        unassigned_row = next(l for l in lines if l.startswith("| T2 "))
+        self.assertIn("**Mine**", mine_row)
+        self.assertNotIn("**", unassigned_row)
+
+    def test_no_difficulty_number_leaves_the_cell_uncolored(self):
+        rows = [["T1", "Unassigned", "t", "c", "(dry run -- not generated this run)"]]
+        out = self._render(rows, [False], [None])
+        self.assertNotIn("<span", out)
+
+    def test_cell_text_is_html_escaped(self):
+        rows = [["T1", "Unassigned", "<script>alert(1)</script>", "c", ""]]
+        out = self._render(rows, [False], [None])
+        self.assertNotIn("<script>", out)
+        self.assertIn("&lt;script&gt;", out)
+
+    def test_a_literal_pipe_in_cell_text_does_not_break_the_row(self):
+        rows = [["T1", "Unassigned", "a | b", "c", ""]]
+        out = self._render(rows, [False], [None])
+        self.assertIn("a \\| b", out)
+
+    def test_case_cell_links_to_the_crm_url_when_present(self):
+        rows = [["T2621277", "Unassigned", "t", "c", ""]]
+        out = self._render(rows, [False], [None], urls=["https://crm.example/main.aspx?id=abc&x=1"])
+        self.assertIn("| [T2621277](https://crm.example/main.aspx?id=abc&x=1) |", out)
+
+    def test_case_cell_is_plain_text_when_no_url(self):
+        rows = [["T1", "Unassigned", "t", "c", ""]]
+        out = self._render(rows, [False], [None], urls=[None])
+        self.assertIn("| T1 |", out)
+        self.assertNotIn("[T1]", out)
 
 
 class MainLoopTests(unittest.TestCase):
@@ -432,6 +615,10 @@ class MainLoopTests(unittest.TestCase):
         # read), so --limit shouldn't hide it from the output even while
         # it caps how many new/stale cases get reprocessed.
         current = {"ticket_number": "T0", "title": "t0", "customer": "c0", "is_new": False, "stale": False}
+        # A guide already on disk -- genuinely nothing left to do, so it
+        # shouldn't itself count against --limit (see _needs_processing).
+        with open(os.path.join(self.tmp, "guide", "guide-T0.md"), "w", encoding="utf-8") as f:
+            f.write(_guide())
         new_cases = [self._new_case(f"T{n}") for n in range(1, 4)]
         calls = []
 
@@ -447,6 +634,11 @@ class MainLoopTests(unittest.TestCase):
 
     def test_an_up_to_date_case_is_included_without_calling_run_stage(self):
         current = {"ticket_number": "T1", "title": "t1", "customer": "c1", "is_new": False, "stale": False}
+        # A guide already on disk -- genuinely nothing left to do. Without
+        # this, _needs_processing would (correctly) want to (re)process it
+        # -- see test_a_fresh_brief_with_a_missing_guide_gets_only_case_guide_rerun.
+        with open(os.path.join(self.tmp, "guide", "guide-T1.md"), "w", encoding="utf-8") as f:
+            f.write(_guide())
         run_stage = mock.Mock()
         with mock.patch("builtins.print") as fake_print:
             rc = self._run([current], run_stage)
@@ -454,7 +646,10 @@ class MainLoopTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         printed = "\n".join(str(c.args[0]) for c in fake_print.call_args_list if c.args)
         self.assertIn("T1", printed)
-        self.assertIn("up to date", printed)
+        # "up to date" is deliberately never printed -- it's the default
+        # expected state for every row, not worth calling out (see
+        # _status_label); a genuinely stale row would say "Stale" instead.
+        self.assertNotIn("up to date", printed)
 
     def test_a_stale_case_is_reprocessed(self):
         stale = {"ticket_number": "T1", "title": "t1", "customer": "c1", "is_new": False, "stale": True}
@@ -472,6 +667,45 @@ class MainLoopTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn(("case_brief.py", "T1"), calls)
         self.assertIn(("case_guide.py", "T1"), calls)
+
+    def test_a_fresh_brief_with_a_missing_guide_gets_only_case_guide_rerun(self):
+        # The bug this guards against: a case whose brief is already
+        # current but was never followed by a case-guide run (e.g. a brief
+        # created by hand, or by a run whose case-guide call failed) used
+        # to be treated as fully up to date and left alone forever --
+        # correct case-brief/case-guide (re)run behavior for it is to skip
+        # the already-current case-brief and only (re)run case-guide.
+        current = {"ticket_number": "T1", "title": "t1", "customer": "c1", "is_new": False, "stale": False}
+        calls = []
+
+        def fake_run_stage(script, number):
+            calls.append(os.path.basename(script))
+            with open(os.path.join(self.tmp, "guide", f"guide-{number}.md"), "w", encoding="utf-8") as f:
+                f.write(_guide())
+            return 0
+
+        rc = self._run([current], fake_run_stage)
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, ["case_guide.py"])  # case_brief.py never called
+
+    def test_a_guide_missing_the_difficulty_line_gets_retried(self):
+        # The other half of the same bug: a guide that genuinely exists but
+        # is missing its difficulty line (claude dropped it) used to be
+        # indistinguishable from "done" and never got another try.
+        current = {"ticket_number": "T1", "title": "t1", "customer": "c1", "is_new": False, "stale": False}
+        with open(os.path.join(self.tmp, "guide", "guide-T1.md"), "w", encoding="utf-8") as f:
+            f.write("# Case T1\n\nNo difficulty line in here at all.\n")
+        calls = []
+
+        def fake_run_stage(script, number):
+            calls.append(os.path.basename(script))
+            with open(os.path.join(self.tmp, "guide", f"guide-{number}.md"), "w", encoding="utf-8") as f:
+                f.write(_guide())  # this time claude includes the line
+            return 0
+
+        rc = self._run([current], fake_run_stage)
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, ["case_guide.py"])  # case_brief.py never called
 
     def test_dry_run_never_calls_run_stage(self):
         cases = [self._new_case("T1")]
@@ -503,6 +737,14 @@ class MainLoopTests(unittest.TestCase):
         with open(written[0], "r", encoding="utf-8") as f:
             self.assertIn("T1", f.read())
 
+    def test_the_written_report_links_the_case_number_to_its_crm_url(self):
+        case = self._new_case("T1")
+        case["url"] = "https://crm.example/main.aspx?id=abc"
+        self._run([case], lambda script, number: 1)  # brief fails -- still writes a report
+        written = glob.glob(os.path.join(self.tmp, "gets", "get-*.md"))
+        with open(written[0], "r", encoding="utf-8") as f:
+            self.assertIn("[T1](https://crm.example/main.aspx?id=abc)", f.read())
+
     def test_default_sort_orders_the_triage_summary_easiest_first(self):
         # No --sort flag at all -- easiest-first is now the default, not
         # an opt-in.
@@ -519,11 +761,11 @@ class MainLoopTests(unittest.TestCase):
         with mock.patch("builtins.print") as fake_print:
             self._run(cases, fake_run_stage)
         printed = "\n".join(str(c.args[0]) for c in fake_print.call_args_list if c.args)
-        # The bulleted triage-summary lines specifically ("- T2 (..."),
-        # not just any mention of the case number -- both cases' own
-        # "=== T1 ===" / "=== T2 ===" processing headers print in the
-        # original (unsorted) order regardless of --sort.
-        self.assertLess(printed.index("- T2 ("), printed.index("- T1 ("))
+        # The triage-summary bullet lines specifically ("- T2"), not just
+        # any mention of the case number -- both cases' own "=== T1 ===" /
+        # "=== T2 ===" processing headers print in the original (unsorted)
+        # order regardless of --sort.
+        self.assertLess(printed.index("- T2"), printed.index("- T1"))
 
     def test_sort_hardest_reverses_the_default(self):
         cases = [self._new_case("T1", "t1", "c1"), self._new_case("T2", "t2", "c2")]
@@ -539,7 +781,7 @@ class MainLoopTests(unittest.TestCase):
         with mock.patch("builtins.print") as fake_print:
             self._run(cases, fake_run_stage, argv=["--sort", "hardest"])
         printed = "\n".join(str(c.args[0]) for c in fake_print.call_args_list if c.args)
-        self.assertLess(printed.index("- T2 ("), printed.index("- T1 ("))
+        self.assertLess(printed.index("- T2"), printed.index("- T1"))
 
     def test_a_failed_guide_after_a_successful_brief_still_reports_title_and_customer(self):
         # CLAUDE.md calls this out by name: "a failed case_guide.py call

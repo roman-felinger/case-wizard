@@ -392,6 +392,19 @@ class BuildPromptDifficultyRubricTests(unittest.TestCase):
         self.assertIn("1  -- Trivial", prompt)
         self.assertIn("10 -- Highest", prompt)
 
+    def test_rubric_has_an_n_a_band_for_non_dev_task_cases(self):
+        # An automated/informational notification (e.g. a BC "environment
+        # updated" e-mail) or pure triage/closure case has no dev work to
+        # size at all -- forcing it onto the 1-10 scale used to produce
+        # inconsistent 1s and 9s for the exact same kind of case.
+        self.assertIn("N/A", cg.DIFFICULTY_RUBRIC)
+        self.assertIn("Not a dev task", cg.DIFFICULTY_RUBRIC)
+
+    def test_instructs_claude_that_n_a_is_a_valid_difficulty_value(self):
+        prompt = self._prompt()
+        self.assertIn("**Implementation Difficulty:** N/A", prompt)
+        self.assertIn("do NOT force", prompt)
+
     def test_instructs_claude_to_output_a_difficulty_line(self):
         prompt = self._prompt()
         self.assertIn("**Implementation Difficulty:** X/10", prompt)
@@ -401,6 +414,44 @@ class BuildPromptDifficultyRubricTests(unittest.TestCase):
         prompt = self._prompt()
         self.assertIn("**Ready for Implementation:** Yes", prompt)
         self.assertIn("Before You Start -- Social Steps", prompt)
+
+    def test_difficulty_is_marked_required_with_no_exceptions(self):
+        # The instruction that used to just ask for the line now says
+        # explicitly that it's mandatory -- including for a trivial
+        # triage/closure case, the exact shape that was slipping through.
+        prompt = self._prompt()
+        self.assertIn("REQUIRED", prompt)
+        self.assertIn("no exceptions", prompt)
+
+    def test_difficulty_comes_immediately_after_readiness_before_social_steps(self):
+        # The ordering conflict this closes: readiness (step 2) and
+        # difficulty (step 3) used to both claim "right after the summary,"
+        # leaving claude to decide whether Social Steps or the difficulty
+        # line came second -- a guide with a long Social Steps section
+        # could then push the difficulty line out past a naive early-text
+        # sanity check. Now the prompt is explicit that both status lines
+        # are a back-to-back pair, with Social Steps (if any) after both.
+        prompt = self._prompt()
+        self.assertIn("back-to-back pair", prompt)
+        self.assertIn("never between them", prompt)
+
+    def test_status_lines_are_instructed_before_the_summary_not_after(self):
+        # Moved even earlier than the original fix: the two required status
+        # lines now go before "What this case is about" entirely, not just
+        # before the Social Steps section -- so a long case summary can
+        # never push them down either.
+        prompt = self._prompt()
+        self.assertLess(prompt.index("**Ready for Implementation:** Yes"), prompt.index("**What this case is about**"))
+        self.assertLess(prompt.index("**Implementation Difficulty:** X/10"), prompt.index("**What this case is about**"))
+
+    def test_closing_reminder_calls_out_both_required_lines(self):
+        # A final, recency-favoring reminder just before the "output only
+        # the guide" instruction -- belt-and-suspenders on top of the
+        # step-by-step instructions above.
+        prompt = self._prompt()
+        self.assertIn("Before you finish", prompt)
+        self.assertIn("**Ready for Implementation:**", prompt.split("Before you finish")[1])
+        self.assertIn("**Implementation Difficulty:**", prompt.split("Before you finish")[1])
 
 
 class LooksLikeGuideTests(unittest.TestCase):
@@ -446,6 +497,101 @@ class HasDifficultyRatingTests(unittest.TestCase):
         text = "**Implementation Difficulty:** 10/10 -- architecture-level.\n"
         self.assertTrue(cg._has_difficulty_rating(text))
 
+    def test_matches_n_a_for_a_non_dev_task_case(self):
+        # An automated notification/pure-triage case is a legitimate N/A,
+        # not a missing rating -- see DIFFICULTY_RUBRIC's own N/A entry.
+        text = "**Implementation Difficulty:** N/A -- automated environment-update notification, nothing to develop.\n"
+        self.assertTrue(cg._has_difficulty_rating(text))
+
+    def test_true_even_when_the_line_lands_past_the_first_1000_characters(self):
+        # A real bug: a verbose case summary, or a "Before You Start --
+        # Social Steps" section ahead of it, can easily push a perfectly
+        # correctly written line past an arbitrary early cutoff -- a false
+        # negative here used to make ensure_difficulty_rating splice in a
+        # second, duplicate line right next to the real one.
+        text = "# Case T1\n\n" + ("Filler. " * 200) + "\n\n**Implementation Difficulty:** 4/10 -- small.\n"
+        self.assertGreater(len(text), 1000)
+        self.assertTrue(cg._has_difficulty_rating(text))
+
+
+class InsertDifficultyRatingTests(unittest.TestCase):
+    LINE = "**Implementation Difficulty:** 4/10 -- small, one module."
+
+    def test_inserted_right_after_the_readiness_line_when_present(self):
+        guide = "# Case T1\n\n**Ready for Implementation:** Yes\n\n## What this case is about\nSomething.\n"
+        result = cg._insert_difficulty_rating(guide, self.LINE)
+        lines = result.split("\n")
+        self.assertEqual(lines[2], "**Ready for Implementation:** Yes")
+        self.assertEqual(lines[3], self.LINE)
+        self.assertIn("## What this case is about", result)
+
+    def test_inserted_right_after_the_title_when_no_readiness_line(self):
+        guide = "# Case T1\n\n## What this case is about\nSomething.\n"
+        result = cg._insert_difficulty_rating(guide, self.LINE)
+        lines = result.split("\n")
+        self.assertEqual(lines[0], "# Case T1")
+        self.assertEqual(lines[2], self.LINE)
+        self.assertIn("## What this case is about", result)
+
+    def test_handles_a_guide_with_no_newline_at_all(self):
+        result = cg._insert_difficulty_rating("just one line", self.LINE)
+        self.assertIn("just one line", result)
+        self.assertIn(self.LINE, result)
+
+
+class EnsureDifficultyRatingTests(unittest.TestCase):
+    """ensure_difficulty_rating is the code-level guarantee that a guide
+    ends up with a parseable difficulty line -- the same pattern
+    _add_guess_warning already uses for the repo-guess warning, applied
+    here via a small, targeted retry call instead of trusting claude
+    followed the main prompt's instruction."""
+
+    GUIDE = "# Case T1\n\n## What this case is about\nSomething.\n"
+
+    def test_already_present_short_circuits_without_calling_claude(self):
+        guide = self.GUIDE + "\n**Implementation Difficulty:** 4/10 -- small.\n"
+        with mock.patch.object(cg, "call_claude") as call_claude:
+            result = cg.ensure_difficulty_rating(guide)
+        call_claude.assert_not_called()
+        self.assertEqual(result, guide)
+
+    def test_a_usable_retry_response_gets_spliced_in(self):
+        response = "**Implementation Difficulty:** 6/10 -- multiple files, real logic."
+        with mock.patch.object(cg, "call_claude", return_value=response) as call_claude:
+            result = cg.ensure_difficulty_rating(self.GUIDE)
+        call_claude.assert_called_once()
+        self.assertTrue(cg._has_difficulty_rating(result))
+        self.assertIn(response, result)
+
+    def test_an_n_a_retry_response_is_accepted_too(self):
+        response = "**Implementation Difficulty:** N/A -- automated notification, nothing to develop."
+        with mock.patch.object(cg, "call_claude", return_value=response) as call_claude:
+            result = cg.ensure_difficulty_rating(self.GUIDE)
+        call_claude.assert_called_once()
+        self.assertTrue(cg._has_difficulty_rating(result))
+        self.assertIn(response, result)
+
+    def test_a_bad_first_attempt_is_retried(self):
+        responses = ["sorry, I can't help with that", "**Implementation Difficulty:** 3/10 -- one file."]
+        with mock.patch.object(cg, "call_claude", side_effect=responses) as call_claude:
+            result = cg.ensure_difficulty_rating(self.GUIDE, attempts=2)
+        self.assertEqual(call_claude.call_count, 2)
+        self.assertTrue(cg._has_difficulty_rating(result))
+
+    def test_every_attempt_failing_leaves_the_guide_unchanged_rather_than_blocking(self):
+        with mock.patch.object(cg, "call_claude", return_value="no usable line here") as call_claude:
+            result = cg.ensure_difficulty_rating(self.GUIDE, attempts=2)
+        self.assertEqual(call_claude.call_count, 2)
+        self.assertEqual(result, self.GUIDE)
+        self.assertFalse(cg._has_difficulty_rating(result))
+
+    def test_the_retry_prompt_inlines_the_fixed_rubric(self):
+        with mock.patch.object(cg, "call_claude", return_value="") as call_claude:
+            cg.ensure_difficulty_rating(self.GUIDE, attempts=1)
+        prompt = call_claude.call_args[0][0]
+        self.assertIn(cg.DIFFICULTY_RUBRIC, prompt)
+        self.assertIn(self.GUIDE.strip(), prompt)
+
 
 class HasReadinessMarkerTests(unittest.TestCase):
     def test_true_for_yes(self):
@@ -459,6 +605,11 @@ class HasReadinessMarkerTests(unittest.TestCase):
     def test_false_when_missing_entirely(self):
         text = "# Case T1\n\n## What this case is about\nSomething.\n"
         self.assertFalse(cg._has_readiness_marker(text))
+
+    def test_true_even_when_the_line_lands_past_the_first_1000_characters(self):
+        text = "# Case T1\n\n" + ("Filler. " * 200) + "\n\n**Ready for Implementation:** Yes\n"
+        self.assertGreater(len(text), 1000)
+        self.assertTrue(cg._has_readiness_marker(text))
 
 
 class ExtractFromBriefTests(unittest.TestCase):

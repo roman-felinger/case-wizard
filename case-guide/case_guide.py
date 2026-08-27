@@ -300,7 +300,8 @@ def _truncate(text, limit, label="live Azure DevOps detail"):
     )
 
 
-DIFFICULTY_RUBRIC = """1  -- Trivial: a one-line/config value change, no real logic, obviously correct on sight.
+DIFFICULTY_RUBRIC = """N/A -- Not a dev task at all: an automated/informational notification (e.g. a Business Central "environment updated successfully" or "update scheduled" e-mail that generated a case with no complaint/error/ask in it), or a pure CRM triage/closure action with no code-level work to scope. Different from "1" -- "1" is still a real (if tiny) task; N/A means there is nothing to rate on a dev-effort scale at all. Don't force these into "1" (trivial) or "9"/"10" (underspecified) just to produce a number -- both misrepresent the same situation: there's no development work here to size.
+1  -- Trivial: a one-line/config value change, no real logic, obviously correct on sight.
 2  -- Very small: a few lines in one file, follows an existing pattern exactly.
 3  -- Small: one file/module, straightforward logic, tests follow an existing pattern.
 4  -- Small-medium: a couple of files, minor new logic, needs some care but no new concepts.
@@ -322,24 +323,41 @@ comments) that goes beyond what the brief itself shows.
 Write a Markdown guide titled "# Case {case_number}" a newcomer could follow start \
 to finish. Cover, in this order:
 
-1. **What this case is about** -- a plain-language summary of the customer's problem, pulled \
-   from the case description below.
-2. **Readiness check** -- one line, right after the summary: `**Ready for Implementation:** Yes` \
-   or `**Ready for Implementation:** No -- <short reason>`. Answer No only when the case is \
-   blocked on something a developer cannot resolve alone -- info only the customer can supply, \
-   a decision or approval only a team lead/manager can make, or an action that depends on \
-   another person or team. Answer Yes even when the case is difficult, ambiguous, or \
-   under-specified in ways a competent developer could reasonably resolve while implementing --
-   this line is about who has to act next, not how hard the work is. If the answer is No, add a \
-   "## Before You Start -- Social Steps" section immediately after this line (before the rest of \
-   the guide) with a concrete numbered list of what to do -- e.g. "Reply to the customer asking \
-   whether X or Y is intended", "Ask your team lead whether this needs manager sign-off", "Call \
-   [team/person] to confirm Z". If the answer is Yes, do not add that section at all.
-3. **Implementation difficulty** -- one line, right after the readiness check: \
-   `**Implementation Difficulty:** X/10 -- <short reason>`, where X is picked from the fixed \
-   DIFFICULTY RUBRIC below. Use those bands as given -- don't invent your own scale or wording \
-   for them, so difficulty stays comparable across different guides/cases. Rate it even when \
-   readiness above is No -- it's still useful once the social steps are resolved.
+1. **Readiness check** -- REQUIRED on every single guide, no exceptions, even a trivial \
+   closure/triage case with no dev work at all: the very first thing after the title, before \
+   the summary or anything else -- \
+   `**Ready for Implementation:** Yes` or `**Ready for Implementation:** No -- <short reason>`. \
+   Answer No only when the case is blocked on something a developer cannot resolve alone -- info \
+   only the customer can supply, a decision or approval only a team lead/manager can make, or an \
+   action that depends on another person or team. Answer Yes even when the case is difficult, \
+   ambiguous, or under-specified in ways a competent developer could reasonably resolve while \
+   implementing -- this line is about who has to act next, not how hard the work is.
+2. **Implementation difficulty** -- ALSO REQUIRED on every single guide, no exceptions, \
+   regardless of the readiness answer above and regardless of how trivial or how far outside \
+   normal dev work the case turns out to be: one line, immediately after the readiness line from \
+   step 1 -- nothing in between, still before the summary -- either \
+   `**Implementation Difficulty:** X/10 -- <short reason>` where X is picked from the fixed \
+   DIFFICULTY RUBRIC below, or `**Implementation Difficulty:** N/A -- <short reason>` for a case \
+   that's an automated/informational notification or pure triage/closure with no code-level work \
+   to scope at all (see the rubric's own N/A entry -- do NOT force one of these into "1" or into \
+   "9"/"10" just to produce a number; both misrepresent the exact same "nothing to size" \
+   situation, and doing that makes N/A-shaped cases score inconsistently from one guide to the \
+   next). Use the rubric's bands/wording as given either way -- don't invent your own scale. Rate \
+   it even when readiness above is No -- it's still useful once the social steps are resolved. \
+   Only *after* \
+   this line, if (and only if) readiness above was No, add a \
+   "## Before You Start -- Social Steps" section with a concrete numbered list of what to do -- \
+   e.g. "Reply to the customer asking whether X or Y is intended", "Ask your team lead whether \
+   this needs manager sign-off", "Call [team/person] to confirm Z". If readiness was Yes, do not \
+   add that section at all. These two status lines (readiness, then difficulty) always come as a \
+   back-to-back pair right after the title, before the case summary and everything else -- the \
+   Social Steps section, if there is one, comes after both, never between them and never before \
+   them.
+3. **What this case is about** -- a plain-language summary of the customer's problem, pulled \
+   from the case description below. Comes after the two status lines (and the Social Steps \
+   section, if there is one) -- you already have the full case material below before writing \
+   anything, so put the two required status lines first regardless of where the summary ends up \
+   landing in length.
 4. **Get set up** -- the exact `git clone` / `cd` / `git checkout -b` commands to run (use the \
    suggested repo/branch below if present; otherwise say plainly that no repo has been \
    identified yet and what to do about it). If the suggested repo below is marked as guessed \
@@ -358,6 +376,12 @@ to finish. Cover, in this order:
 Be concrete wherever the material below supports it; be honest about gaps rather than inventing \
 detail that isn't there. Output only the Markdown guide itself, nothing else -- no preamble, no \
 "here's your guide" framing.
+
+Before you finish: double-check the guide includes BOTH the `**Ready for Implementation:**` line \
+and the `**Implementation Difficulty:** X/10` line from steps 1-2 above, back-to-back, as the \
+very first thing after the title -- before the summary, before everything else. Every guide \
+needs both, with no exceptions -- including a case that turns out to be pure triage/closure with \
+no code to write at all (that's still ratable on the rubric, typically at the low end).
 
 --- DIFFICULTY RUBRIC (fixed bands -- use these, not your own judgment of what a number means) ---
 {difficulty_rubric}
@@ -420,16 +444,104 @@ def _looks_like_guide(text, case_number):
     return head.startswith("#") and str(case_number).lower() in head
 
 
-_DIFFICULTY_RE = re.compile(r"(?im)\*\*Implementation Difficulty:\*\*\s*\d{1,2}\s*/\s*10")
+_DIFFICULTY_RE = re.compile(r"(?im)\*\*Implementation Difficulty:\*\*\s*(?:\d{1,2}\s*/\s*10|N/A)")
 
 
 def _has_difficulty_rating(text):
-    """Same spirit as _looks_like_guide: a loose, warn-only check that
-    claude actually followed the "Implementation difficulty" instruction
-    (see PROMPT_TEMPLATE/DIFFICULTY_RUBRIC) instead of silently dropping it.
-    Never blocks writing the file -- a human can judge the actual content
-    far better than this can."""
-    return bool(_DIFFICULTY_RE.search(text[:1000]))
+    """Same spirit as _looks_like_guide: a loose check that claude actually
+    followed the "Implementation difficulty" instruction (see
+    PROMPT_TEMPLATE/DIFFICULTY_RUBRIC) instead of silently dropping it. Used
+    both to decide whether ensure_difficulty_rating needs to do anything,
+    and as main's own final warn-only check for the rare case where every
+    retry attempt still came back unparseable.
+
+    Searches the whole text, not just a leading slice -- an earlier
+    `text[:1000]` cap meant to catch a dropped line as a "not near the top"
+    sanity check instead produced false negatives on a real, correctly
+    written line: a verbose case summary (step 1) or an inserted "Before
+    You Start -- Social Steps" section (step 3's own instruction, when
+    readiness is No) can easily push the line past the first 1000
+    characters even though it's exactly where the prompt asked for it. A
+    false negative here isn't just a wrong warning -- ensure_difficulty_rating
+    trusts it and would splice in a second, duplicate line right next to a
+    perfectly good first one."""
+    return bool(_DIFFICULTY_RE.search(text))
+
+
+# Same marker as _DIFFICULTY_RE, but capturing the whole line (including the
+# "-- <reason>" part _DIFFICULTY_RE doesn't need) -- used to pull a usable
+# line back out of ensure_difficulty_rating's own retry response, not just
+# to detect whether one is present.
+_DIFFICULTY_LINE_RE = re.compile(r"(?im)^.*\*\*Implementation Difficulty:\*\*\s*(?:\d{1,2}\s*/\s*10|N/A).*$")
+
+_DIFFICULTY_RETRY_ATTEMPTS = 2
+
+_DIFFICULTY_RETRY_PROMPT = """The case guide below is missing its required "Implementation Difficulty" \
+line. Using the fixed rubric below, output exactly one line and nothing else -- no preamble, no \
+markdown fence, no explanation beyond what the line itself allows:
+
+**Implementation Difficulty:** X/10 -- <short reason>
+
+...or, if the rubric's own N/A entry applies (an automated/informational notification or pure \
+triage/closure case with no code-level work to scope at all -- not the same as a genuinely \
+trivial "1"):
+
+**Implementation Difficulty:** N/A -- <short reason>
+
+--- DIFFICULTY RUBRIC (fixed bands -- use these, not your own judgment of what a number means) ---
+{difficulty_rubric}
+
+--- CASE GUIDE ---
+{guide_text}
+"""
+
+
+def _insert_difficulty_rating(guide_text, line):
+    """Splices a recovered difficulty line into the guide at the same spot
+    PROMPT_TEMPLATE asks claude to put it -- right after the Readiness
+    check line if there is one (matching step 3 following step 2), \
+    otherwise right after the title heading."""
+    m = _READINESS_RE.search(guide_text)
+    if m:
+        end = guide_text.index("\n", m.end()) if "\n" in guide_text[m.end():] else len(guide_text)
+        return f"{guide_text[:end]}\n{line}{guide_text[end:]}"
+    heading, sep, rest = guide_text.partition("\n")
+    if not sep:
+        return f"{guide_text}\n\n{line}\n"
+    return f"{heading}\n\n{line}\n{rest}"
+
+
+def ensure_difficulty_rating(guide_text, model=None, extra_args=None, timeout=600,
+                              attempts=_DIFFICULTY_RETRY_ATTEMPTS):
+    """Guarantees the guide has a parseable Implementation Difficulty line
+    instead of just warning when claude drops it -- a code-level guarantee,
+    the same pattern _add_guess_warning already uses for the repo-guess
+    warning, rather than hoping claude followed the prompt instruction.
+    (Before this existed, a guide claude dropped the line from stayed
+    broken forever -- case-getter would keep reprocessing the same case
+    every single run trying to get a difficulty rating out of it; see its
+    own CLAUDE.md section. A full case-guide rerun is a far more expensive
+    way to fix the exact same one-line problem than retrying just that
+    line here.)
+
+    Each retry is a small, focused follow-up call -- just the guide text
+    and the fixed rubric, asking for exactly one line back -- rather than
+    regenerating the whole guide, so this stays cheap even across a few
+    attempts. Still never blocks writing the file if every attempt comes
+    back unparseable (see main's own warning for that remaining, very
+    unlikely case) -- a human can judge the actual content far better than
+    this can."""
+    for _ in range(attempts):
+        if _has_difficulty_rating(guide_text):
+            return guide_text
+        prompt = _DIFFICULTY_RETRY_PROMPT.format(
+            difficulty_rubric=DIFFICULTY_RUBRIC, guide_text=guide_text[:4000],
+        )
+        response = call_claude(prompt, model=model, extra_args=extra_args, timeout=timeout)
+        m = _DIFFICULTY_LINE_RE.search(response)
+        if m:
+            guide_text = _insert_difficulty_rating(guide_text, m.group(0).strip())
+    return guide_text
 
 
 # case-solve reads this exact line back out of the finished guide to decide
@@ -446,8 +558,10 @@ def _has_readiness_marker(text):
     PROMPT_TEMPLATE) instead of silently dropping it -- case-solve depends
     on this line being present to know whether it's safe to implement.
     Never blocks writing the file -- a human can judge the actual content
-    far better than this can."""
-    return bool(_READINESS_RE.search(text[:1000]))
+    far better than this can. Searches the whole text, not just a leading
+    slice -- see _has_difficulty_rating's docstring for why a truncated
+    search produces false negatives, not just a stricter check."""
+    return bool(_READINESS_RE.search(text))
 
 
 def call_claude(prompt, model=None, extra_args=None, timeout=600, agent_name=None):
@@ -580,14 +694,12 @@ def main():
     agent_name = None if args.no_agent else cfg["claude"]["agent"]
     prompt = build_prompt(args.case_number, brief_text, suggested_repo_text, ado_detail_text, example_text)
 
+    model = args.model if args.model is not None else cfg["claude"]["model"]
+    extra_args = _resolve_extra_args(args, cfg)
+    timeout = args.timeout if args.timeout is not None else cfg["claude"]["timeout"]
+
     print("Asking claude to write the guide (this can take a minute)...")
-    guide_text = call_claude(
-        prompt,
-        model=args.model if args.model is not None else cfg["claude"]["model"],
-        extra_args=_resolve_extra_args(args, cfg),
-        timeout=args.timeout if args.timeout is not None else cfg["claude"]["timeout"],
-        agent_name=agent_name,
-    )
+    guide_text = call_claude(prompt, model=model, extra_args=extra_args, timeout=timeout, agent_name=agent_name)
 
     if not _looks_like_guide(guide_text, args.case_number):
         print(
@@ -597,9 +709,16 @@ def main():
             file=sys.stderr,
         )
     if not _has_difficulty_rating(guide_text):
+        print("The guide is missing its Implementation Difficulty line -- asking claude for just that...")
+        guide_text = ensure_difficulty_rating(guide_text, model=model, extra_args=extra_args, timeout=timeout)
+    if not _has_difficulty_rating(guide_text):
+        # Every retry attempt in ensure_difficulty_rating still came back
+        # unparseable -- very unlikely, but don't block writing the file
+        # over it; a human can judge/add it far better than another retry
+        # loop here could.
         print(
             "Warning: claude's output doesn't include the expected \"**Implementation Difficulty:** X/10\" "
-            "line -- writing it anyway, but take a look before trusting it.",
+            "line, even after retrying -- writing it anyway, but take a look before trusting it.",
             file=sys.stderr,
         )
     if not _has_readiness_marker(guide_text):

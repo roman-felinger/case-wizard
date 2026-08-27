@@ -51,6 +51,7 @@ Examples:
 import argparse
 import datetime
 import glob
+import html
 import os
 import re
 import subprocess
@@ -209,15 +210,33 @@ def run_stage(script, case_number):
 # ado_api.py copies.
 _CASE_TITLE_RE = re.compile(r"^###\s+(.+?)\s*$", re.MULTILINE)
 _CUSTOMER_RE = re.compile(r"^-\s+\*\*Customer:\*\*\s*(.+?)\s*$", re.MULTILINE)
-_DIFFICULTY_RE = re.compile(r"(?im)\*\*Implementation Difficulty:\*\*\s*(\d{1,2}\s*/\s*10)\s*(?:-{1,2}\s*)?(.*)$")
+# Matches either a real "X/10" rating or case-guide's "N/A" band (an
+# automated notification / pure triage-closure case with no dev work to
+# size -- see case-guide's DIFFICULTY_RUBRIC) -- both are a complete,
+# valid rating, not a missing one; see _extract_difficulty/_needs_processing
+# for why that distinction matters (an N/A guide must not look "still
+# missing a difficulty" and get endlessly reprocessed).
+_DIFFICULTY_RE = re.compile(r"(?im)\*\*Implementation Difficulty:\*\*\s*(\d{1,2}\s*/\s*10|N/A)\s*(?:[-–—]{1,2}\s*)?(.*)$")
 
 
 def _extract_difficulty(guide_text):
-    """The "X/10 -- reason" implementation-difficulty string out of a
-    guide's own text, or None if there's no guide text or no recognizable
-    difficulty line. Shared by summarize (a guide this run just wrote) and
-    _case_to_row (a guide already on disk from a previous run) -- both read
-    the exact same rendering shape back the exact same way."""
+    """The "X/10 -- reason" (or "N/A -- reason") implementation-difficulty
+    string out of a guide's own text, or None if there's no guide text or
+    no recognizable difficulty line. Shared by summarize (a guide this run
+    just wrote) and _case_to_row (a guide already on disk from a previous
+    run) -- both read the exact same rendering shape back the exact same
+    way.
+
+    The separator claude actually writes between "X/10" and the reason
+    isn't always the literal "--" PROMPT_TEMPLATE's own example shows --
+    claude's prose defaults to a real em dash ("4/10 — reason") often
+    enough that the old `-{1,2}` (ASCII hyphen only) class missed it
+    entirely: the em dash then fell into the reason capture instead of
+    being consumed as the separator, and got reassembled as "4/10 -- —
+    reason" -- this function's own " -- " plus claude's un-stripped one.
+    The character class now also matches an en dash (U+2013) and em dash
+    (U+2014), not just ASCII "-", so either one is consumed the same way
+    and never doubled up."""
     if not guide_text:
         return None
     m = _DIFFICULTY_RE.search(guide_text)
@@ -250,25 +269,8 @@ def summarize(case_number, brief_path, guide_path):
     return row
 
 
-def _ownership_tag(case):
-    return "mine" if case.get("owned_by_me") else "unassigned"
-
-
-def _tag(case):
-    """Ownership plus, when relevant, why this case is/isn't being
-    (re)processed this run -- "mine"/"unassigned", with ", stale" appended
-    for a case that already had a brief but got reprocessed because the CRM
-    data changed since (see is_stale), or ", up to date" for a case that
-    already has a current brief/guide and was left alone, only included for
-    triage. A case with neither flag set (the common shape before this
-    distinction existed, and still the default when "is_new" isn't known)
-    renders exactly as before -- "mine"/"unassigned", nothing extra."""
-    tag = _ownership_tag(case)
-    if case.get("stale"):
-        return f"{tag}, stale"
-    if case.get("is_new") is False:
-        return f"{tag}, up to date"
-    return tag
+def _owner_label(case):
+    return "Mine" if case.get("owned_by_me") else "Unassigned"
 
 
 _DIFFICULTY_NUM_RE = re.compile(r"^(\d{1,2})\s*/\s*10")
@@ -306,6 +308,150 @@ def sort_rows(rows, sort):
     return known + unknown
 
 
+_TABLE_HEADERS = ["Case", "Owner", "Title", "Customer", "Difficulty"]
+
+
+def _difficulty_placeholder(r, dry_run):
+    """Explains *why* a case has no difficulty yet, instead of one generic
+    "not available" string that doesn't say what actually happened --
+    which of these is true varies per row/run:
+      - dry_run: nothing was ever going to be (re)generated this run.
+      - skipped_limit: this case needed (re)processing, but --limit was
+        reached before it got a turn (see main's own `skip` set) -- it'll
+        get one on a future run, or a bigger --limit.
+      - an error is already on this row (case-brief/case-guide failed --
+        see main) -- shown directly rather than pointing at a separate
+        Notes column (there used to be one; it was almost always empty
+        and got dropped -- see "Status/Notes columns dropped" in CLAUDE.md).
+      - otherwise, a guide was generated but claude either dropped the
+        difficulty line or phrased it in a way _DIFFICULTY_RE didn't
+        recognize -- worth a look at the guide itself."""
+    if dry_run:
+        return "(dry run -- not generated this run)"
+    if r.get("skipped_limit"):
+        return "(skipped this run -- raise --limit to include it)"
+    if r.get("error"):
+        return f"⚠ {r['error']}"
+    return "(not found -- check the guide)"
+
+
+def _table_rows(rows, dry_run):
+    """Normalizes each row dict to the fixed column order _TABLE_HEADERS
+    names, for _render_markdown_table."""
+    return [
+        [
+            r["case_number"],
+            _owner_label(r),
+            r.get("title") or "(no title)",
+            r.get("customer") or "unknown customer",
+            r.get("difficulty") or _difficulty_placeholder(r, dry_run),
+        ]
+        for r in rows
+    ]
+
+
+def _format_case_lines(r, dry_run):
+    """Plain-text lines for one case in the console triage output -- no
+    table, no color; that's the on-disk report's job (see
+    build_report_markdown/_render_markdown_table) -- a terminal can't
+    reliably show a difficulty heatmap or highlight "mine" rows the way
+    the report's table can. Owner still gets its own labeled line here,
+    same as the report's own column -- not folded back into one combined
+    tag string the way the very first version of this output did. An
+    error (case-brief/case-guide failed) shows up as the Difficulty line's
+    own text (see _difficulty_placeholder) rather than a separate line --
+    same reasoning as the table's dropped Notes column."""
+    return [
+        f"- {r['case_number']}",
+        f"    Owner: {_owner_label(r)}",
+        f"    {r.get('title') or '(no title)'} -- {r.get('customer') or 'unknown customer'}",
+        f"    Difficulty: {r.get('difficulty') or _difficulty_placeholder(r, dry_run)}",
+    ]
+
+
+# Excel's default red-yellow-green conditional-formatting scale (the same
+# three RGB stops: #63BE7B / #FFEB84 / #F8696B) -- a familiar "low number
+# looks safe, high number looks alarming" scale for a 1-10 difficulty
+# rating, rather than inventing a new one. Lives only in the on-disk report
+# (_render_markdown_table) -- a plain terminal can't reliably show a cell
+# background across every user's setup, so the console stays plain text
+# (see _format_case_lines/print_summary).
+_DIFFICULTY_COLOR_STOPS = ((99, 190, 123), (255, 235, 132), (248, 105, 107))
+
+
+def _difficulty_bg(num):
+    """Hex background color for a 1-10 difficulty rating along
+    _DIFFICULTY_COLOR_STOPS (green -> yellow -> red). None (no rating
+    parsed yet -- see _difficulty_num) gets no background at all, rather
+    than defaulting to one end of the scale it doesn't actually belong on."""
+    if num is None:
+        return None
+    t = max(1, min(10, num))
+    low, mid, high = _DIFFICULTY_COLOR_STOPS
+    start, end, frac = (low, mid, (t - 1) / 4.5) if t <= 5.5 else (mid, high, (t - 5.5) / 4.5)
+    r, g, b = (round(s + (e - s) * frac) for s, e in zip(start, end))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _md_cell(text):
+    """Escapes a free-text cell value (case title/customer/error -- CRM or
+    claude output, not trusted markup) for safe embedding in a Markdown
+    table cell: HTML-escaped so a stray "<"/"&" can't be parsed as a tag/
+    entity by a renderer that treats raw HTML inside a table cell as HTML
+    (GFM does), and "|" escaped so it can't be mistaken for a column
+    separator and break the row."""
+    return html.escape(text).replace("|", "\\|")
+
+
+def _render_markdown_table(headers, rows, mine_flags, difficulty_nums, urls):
+    """The on-disk report's table -- an ordinary GitHub-flavored Markdown
+    pipe table, the same shape as any other table in this repo's docs, not
+    a raw HTML <table>. Three visual cues, all achieved without breaking
+    that plain-table shape:
+      - the Case cell is a clickable link to the case's own CRM record
+        (plain Markdown `[T2621277](url)`, no HTML needed) when a URL is
+        available -- same deep link crm_scrape's listing query already
+        builds (CRM_APP_ID + forceUCI, see case-brief's own "Case link"
+        handling), carried through as-is rather than rebuilt here. Only
+        the visible label goes through _md_cell -- the URL itself is
+        placed raw inside the link's `(...)`, since CommonMark doesn't
+        require escaping "&" there (unlike inside a table cell's own
+        text) and re-escaping it would corrupt the query string.
+      - the Difficulty cell's background is shaded along _difficulty_bg's
+        red-yellow-green scale via a small inline `<span style="...">` --
+        GFM allows raw inline HTML inside a table cell, so this still
+        renders as one ordinary-looking row, just with one colored cell,
+        in any viewer that renders embedded HTML; a viewer that doesn't
+        still shows the row fine, just without the color.
+      - a case the signed-in user already owns gets its Owner cell bolded
+        (plain Markdown `**Mine**`, no HTML needed) instead of a
+        full-row background -- reads at a glance, and degrades to
+        completely ordinary Markdown everywhere.
+    mine_flags/difficulty_nums/urls are parallel lists to `rows` -- kept
+    separate from the rendered string cells rather than smuggled into them,
+    same reasoning as difficulty_nums vs. the rendered difficulty string
+    (see _difficulty_num)."""
+    case_idx = headers.index("Case")
+    diff_idx = headers.index("Difficulty")
+    owner_idx = headers.index("Owner")
+    lines = ["| " + " | ".join(headers) + " |", "| " + " | ".join("---" for _ in headers) + " |"]
+    for cells, mine, diff_num, url in zip(rows, mine_flags, difficulty_nums, urls):
+        rendered = []
+        for i, cell in enumerate(cells):
+            text = _md_cell(cell)
+            if i == case_idx and url:
+                text = f"[{text}]({url})"
+            elif i == diff_idx:
+                bg = _difficulty_bg(diff_num)
+                if bg:
+                    text = f'<span style="background:{bg};padding:1px 6px;border-radius:3px">{text}</span>'
+            elif i == owner_idx and mine:
+                text = f"**{text}**"
+            rendered.append(text)
+        lines.append("| " + " | ".join(rendered) + " |")
+    return "\n".join(lines)
+
+
 def print_summary(rows):
     if not rows:
         print("\nNo relevant cases found.")
@@ -314,23 +460,23 @@ def print_summary(rows):
     print(f"\n{len(rows)} relevant case(s) ({processed} briefed/guided this run, "
           f"{len(rows) - processed} left as-is):\n")
     for r in rows:
-        print(f"- {r['case_number']} ({_tag(r)}): {r['title'] or '(no title)'} -- {r['customer'] or 'unknown customer'}")
-        print(f"    Difficulty: {r['difficulty'] or '(not found -- check the guide)'}")
-        if r.get("error"):
-            print(f"    ⚠ {r['error']}")
+        print("\n".join(_format_case_lines(r, dry_run=False)))
 
 
 def _case_to_row(c, guide_dir=GUIDE_DIR):
     """Normalizes one entry from find_relevant_cases (a raw CRM listing
     dict, keyed `ticket_number`) to the same {case_number, owned_by_me,
-    stale, is_new, title, customer, difficulty} shape a fully-processed row
-    already has -- used for the dry-run listing/report, which never
+    stale, is_new, title, customer, difficulty, url} shape a fully-processed
+    row already has -- used for the dry-run listing/report, which never
     (re)generates a brief/guide the way main's own processing loop does.
     difficulty is read from a guide already on disk from a previous run
     when there is one (free -- no claude call, no processing), so a
     dry-run listing still sorts meaningfully by difficulty; a case that's
     never been guided comes back with difficulty None, same as one whose
-    guide failed to generate."""
+    guide failed to generate. `url` is the CRM deep link crm_scrape's own
+    listing query already includes per case (see report.py's "Case link"
+    handling of the same field for case-brief's own briefs) -- carried
+    through as-is, not rebuilt here."""
     return {
         "case_number": c["ticket_number"],
         "owned_by_me": c.get("owned_by_me"),
@@ -339,6 +485,7 @@ def _case_to_row(c, guide_dir=GUIDE_DIR):
         "title": c.get("title"),
         "customer": c.get("customer"),
         "difficulty": _extract_difficulty(_read(os.path.join(guide_dir, f"guide-{safe_name(c['ticket_number'])}.md"))),
+        "url": c.get("url"),
     }
 
 
@@ -349,13 +496,15 @@ def build_report_markdown(rows, dry_run, timestamp):
     already do this for their own per-case output; this is case-getter's
     own equivalent, one file per run rather than one per case.
 
-    Every relevant case gets a section, whether or not this run actually
-    (re)processed it -- see _tag for how a row says which situation it's
-    in ("stale"/"up to date"/neither). Difficulty is rendered the same way
-    in both a real run and a --dry-run listing: a case already guided from
-    a previous run has one to show even in a dry run (see _case_to_row);
-    only a case never guided at all comes back with the "not yet
-    available" placeholder."""
+    Every relevant case gets a row, whether or not this run actually
+    (re)processed it -- Owner is its own column (see _owner_label), never
+    folded into a combined tag string. Rendered as an ordinary Markdown
+    table (_render_markdown_table) with a difficulty heatmap and "mine"
+    row highlighting the console deliberately doesn't have (see
+    print_summary/_format_case_lines) -- see that function's own docstring
+    for how those are done without an HTML table. A missing difficulty
+    explains why rather than showing one generic placeholder -- see
+    _difficulty_placeholder."""
     kind = "dry run" if dry_run else "run"
     lines = [f"# Case-getter {kind} -- {timestamp}", ""]
 
@@ -364,17 +513,16 @@ def build_report_markdown(rows, dry_run, timestamp):
         return "\n".join(lines) + "\n"
 
     lines.append(f"Found {len(rows)} relevant case(s).")
-    lines.append("")
-    for r in rows:
-        lines.append(f"## {r['case_number']} ({_tag(r)})")
-        lines.append(f"- **Title:** {r.get('title') or '(no title)'}")
-        lines.append(f"- **Customer:** {r.get('customer') or 'unknown customer'}")
-        lines.append(f"- **Difficulty:** {r.get('difficulty') or '(not yet available -- not briefed/guided yet)'}")
-        if dry_run:
-            lines.append("- _(dry run -- brief/guide not (re)generated this run)_")
-        if r.get("error"):
-            lines.append(f"- **⚠ Error:** {r['error']}")
+    if dry_run:
         lines.append("")
+        lines.append("_(dry run -- brief/guide not (re)generated this run)_")
+    lines.append("")
+    lines.append(_render_markdown_table(
+        _TABLE_HEADERS, _table_rows(rows, dry_run),
+        [bool(r.get("owned_by_me")) for r in rows], [_difficulty_num(r) for r in rows],
+        [r.get("url") for r in rows],
+    ))
+    lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -390,6 +538,32 @@ def write_report(markdown, output_dir, filename_timestamp):
     with open(path, "w", encoding="utf-8") as f:
         f.write(markdown)
     return path
+
+
+def _needs_processing(c, guide_dir=GUIDE_DIR):
+    """True if this case needs (re)processing this run: a new/stale brief
+    (see is_new/stale on `c`, from find_relevant_cases/is_stale), or --
+    independently -- a guide that isn't actually usable yet, even though
+    its brief is already current:
+      - the guide file simply doesn't exist on disk (e.g. a brief created
+        by hand outside case-getter, or by a previous run whose
+        case-guide call failed), or
+      - it exists, but claude dropped the difficulty line entirely (see
+        _DIFFICULTY_RE) -- a guide missing that line isn't "done", it's a
+        guide that needs another try, the same as a guide that was never
+        generated at all.
+    Checking only brief staleness used to leave a case in either situation
+    stuck showing "(not found -- check the guide)" forever: nothing was
+    ever wrong with the *brief*, so it kept looking fully up to date and
+    case-guide never got another try. Retried on every run until a
+    difficulty line actually sticks -- if a specific case's content makes
+    claude reliably skip that line no matter how many tries, that's worth
+    noticing (it'll keep showing up as reprocessed every run) and fixing
+    in case-guide's own prompt, not silently giving up on it here."""
+    if c.get("is_new") or c.get("stale"):
+        return True
+    guide_path = os.path.join(guide_dir, f"guide-{safe_name(c['ticket_number'])}.md")
+    return _extract_difficulty(_read(guide_path)) is None
 
 
 def build_parser():
@@ -436,16 +610,16 @@ def main():
 
     if args.dry_run:
         rows = sort_rows([_case_to_row(c) for c in cases], args.sort)
+        print()
         for r in rows:
-            print(f"- {r['case_number']} ({_tag(r)}): {r['title'] or '(no title)'} -- {r['customer'] or 'unknown customer'}"
-                  f" -- {r['difficulty'] or 'difficulty not yet available'}")
+            print("\n".join(_format_case_lines(r, dry_run=True)))
         _write_report(rows)
         return 0
 
-    # --limit caps how many new/stale cases actually get (re)processed this
-    # run -- a case already up to date is free to include (just a file
-    # read), so it's never counted against the limit.
-    to_process = [c for c in cases if c.get("is_new") or c.get("stale")]
+    # --limit caps how many cases actually get (re)processed this run -- a
+    # case already fully up to date is free to include (just a file read),
+    # so it's never counted against the limit.
+    to_process = [c for c in cases if _needs_processing(c, GUIDE_DIR)]
     if args.limit is not None:
         skip = {c["ticket_number"] for c in to_process[args.limit:]}
         to_process = to_process[: args.limit]
@@ -458,7 +632,7 @@ def main():
         row = {
             "case_number": number, "owned_by_me": c.get("owned_by_me"),
             "stale": c.get("stale", False), "is_new": c.get("is_new", True),
-            "attempted": False,
+            "attempted": False, "url": c.get("url"),
         }
         brief_path = os.path.join(BRIEF_DIR, f"brief-{safe_name(number)}.md")
         guide_path = os.path.join(GUIDE_DIR, f"guide-{safe_name(number)}.md")
@@ -466,26 +640,36 @@ def main():
         if number in skip:
             # Would need (re)processing, but --limit was reached first --
             # still shown in the triage list with whatever's on disk
-            # (possibly nothing yet, for a brand-new case).
+            # (possibly nothing yet, for a brand-new case) -- flagged so
+            # a missing difficulty says *why* (see _difficulty_placeholder)
+            # instead of looking like an unexplained failure.
+            row["skipped_limit"] = True
             row.update(summarize(number, brief_path, guide_path))
             rows.append(row)
             continue
 
-        if not (c.get("is_new") or c.get("stale")):
-            # Already up to date -- no need to re-run brief/guide, just
-            # read the existing files back for the triage list.
+        if not _needs_processing(c, GUIDE_DIR):
+            # Already fully up to date -- no need to re-run brief/guide,
+            # just read the existing files back for the triage list.
             row.update(summarize(number, brief_path, guide_path))
             rows.append(row)
             continue
 
         row["attempted"] = True
         print(f"\n=== {number} ===")
-        rc = run_stage(BRIEF_SCRIPT, number)
-        if rc != 0 or not os.path.exists(brief_path):
-            row.update({"title": c.get("title"), "customer": c.get("customer"), "difficulty": None})
-            row["error"] = f"case-brief failed (exit {rc}) -- skipped case-guide"
-            rows.append(row)
-            continue
+
+        needs_brief = c.get("is_new") or c.get("stale")
+        if needs_brief:
+            rc = run_stage(BRIEF_SCRIPT, number)
+            if rc != 0 or not os.path.exists(brief_path):
+                row.update({"title": c.get("title"), "customer": c.get("customer"), "difficulty": None})
+                row["error"] = f"case-brief failed (exit {rc}) -- skipped case-guide"
+                rows.append(row)
+                continue
+        # else: the brief is already current -- _needs_processing only
+        # brought this case in because its guide is missing, so there's no
+        # need to re-hit CRM/ADO for data that hasn't changed; go straight
+        # to case-guide.
 
         rc = run_stage(GUIDE_SCRIPT, number)
         if rc != 0 or not os.path.exists(guide_path):

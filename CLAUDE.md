@@ -30,7 +30,7 @@ python run_tests.py                              # every stage's test suite (mus
 python -m unittest discover -s tests -v           # from any one stage's own directory, or repo root for case_wizard.py's own tests
 ```
 
-Test counts: case-brief 196, case-guide 110, case-solve 157, case-getter 63,
+Test counts: case-brief 196, case-guide 128, case-solve 157, case-getter 94,
 root (`case_wizard.py`) 30 — all mocked, no network (case-getter's own tests mock
 subprocess/CRM calls; see its own section below for how it was verified live once).
 Deliberately not exhaustive over every CLI flag or every low-risk rendering/plumbing
@@ -376,7 +376,131 @@ guides/cases, which a fresh, unanchored 1-10 guess every time would not reliably
 `case-guide-writer.md`'s persona doc reinforces the same rubric/brevity expectation
 for when the agent *is* used, but the rubric itself lives in `PROMPT_TEMPLATE` so it
 applies either way. `_has_difficulty_rating` is a loose regex sanity check (same
-warn-only pattern as `_looks_like_guide`) in case `claude` drops the line.
+warn-only pattern as `_looks_like_guide`) for whether `claude` actually included the
+line.
+
+**The difficulty line is now guaranteed, not just checked (2026-08-26, user
+feedback -- "so make sure the difficulty line is in there every time," after
+case-getter's own retry-until-present fix (below) turned out to be treating the
+symptom, not the cause: several real guides genuinely never got a difficulty line
+from the main prompt, no matter how many times the whole guide got regenerated).**
+`ensure_difficulty_rating` is the actual guarantee -- the same code-level-guarantee
+pattern `_add_guess_warning` already uses for the repo-guess warning, applied here
+instead of hoping `claude` followed the main prompt's instruction. When
+`_has_difficulty_rating` comes back false, `main` no longer just warns and moves
+on: it fires a small, focused follow-up `call_claude` call (just the guide text +
+`DIFFICULTY_RUBRIC`, asking for exactly one line back) and splices the recovered
+line into the guide itself (`_insert_difficulty_rating` -- right after the
+Readiness check line if there is one, matching `PROMPT_TEMPLATE`'s own ordering,
+otherwise right after the title). Retries up to `_DIFFICULTY_RETRY_ATTEMPTS` (2)
+times; each attempt is cheap (a short, narrow prompt, one short line back), far
+cheaper than regenerating the whole guide the way case-getter's own retry used to
+force. `_has_difficulty_rating` is checked once more after this and still only
+warns (never blocks writing the file) for the now-very-unlikely case where every
+retry attempt comes back unparseable too -- a human can judge/add the line far
+better than another retry loop here could.
+
+This directly replaces the cost case-getter's own `_needs_processing` fix was
+paying: before this existed, a case whose guide missed the difficulty line got
+its *entire* case-guide run (a full brief re-read, ADO re-fetch, full prompt) redone
+on every single case-getter run, forever, if the same content kept making `claude`
+skip the line. That case-getter-side retry (see its own CLAUDE.md section) still
+exists as the outer safety net -- it's what notices a guide needs *something* -- but
+the actual repair now happens here, for a fraction of the cost.
+
+**...and the retry above shouldn't even be needed most of the time (2026-08-26,
+same-day follow-up, user feedback -- "prompt claude in guide writing that you
+absolutely need this difficulty line ... and then get it first time").**
+Investigating a real case (`guide-T2621277.md`) that still triggered the retry
+turned up two separate, compounding bugs, not just "claude sometimes forgets":
+
+1. **A genuine ordering conflict in `PROMPT_TEMPLATE` itself.** Step 2 (readiness)
+   said the Social Steps section goes "immediately after this line," and step 3
+   (difficulty) separately said it goes "right after the readiness check" --
+   both claiming the same spot. Claude resolved the conflict by placing Social
+   Steps first and difficulty second, which is reasonable, but not what either
+   instruction actually promised, and it pushes the difficulty line down by an
+   entire numbered list on any No-readiness case.
+2. **`_has_difficulty_rating`/`_has_readiness_marker` only ever searched
+   `text[:1000]`.** That cap was meant as a loose "is this near the top" sanity
+   check, but a verbose case summary (step 1) plus a several-item Social Steps
+   section routinely pushes a *correctly written* difficulty line past 1000
+   characters -- a false negative, not a real miss. Because `ensure_difficulty_rating`
+   trusts that check, the false negative made it splice in a *second*,
+   duplicate difficulty line right next to the real one instead of recognizing
+   it was already there -- confirmed exactly this shape in `guide-T2621277.md`
+   (one line at position ~500, inserted by the retry; claude's own original line
+   still sitting ~700 characters later, past the old cutoff).
+
+Both fixed: `PROMPT_TEMPLATE` steps 2-3 now say explicitly that the two status
+lines are a "back-to-back pair right after the summary," with Social Steps (if
+any) coming after *both*, "never between them" -- removing the conflict instead of
+leaving claude to resolve it. Both lines are now marked `REQUIRED`/"no exceptions,"
+matching the imperative language step 4 already used for the repo-guess warning
+("you MUST carry that warning"), and a final reminder was added just before the
+"output only the guide" instruction, naming both required lines again -- a
+recency-favoring belt-and-suspenders repeat, on top of the step-by-step
+instructions. `_has_difficulty_rating`/`_has_readiness_marker` dropped the
+`[:1000]` cap entirely and now search the whole text -- there's no positional
+requirement worth enforcing here that the prompt fix above doesn't already
+handle structurally, and a truncated search only ever produced false negatives,
+never a more accurate result. `guide-T2621277.md`'s own duplicate line was
+cleaned up by hand as a one-off (it's gitignored generated output, not something
+a test covers) once the root cause was confirmed.
+
+The default agent (`case-guide-writer.md`, run whenever `--no-agent` isn't passed
+-- see its own paragraph above) had the *exact same* ordering conflict written
+independently in its own words ("Social Steps... right after that [readiness]
+line, before anything else" vs. difficulty "right after the ... summary") --
+almost certainly what actually produced `guide-T2621277.md`'s original ordering,
+since that's the default path. Fixed the same way: its "Readiness check" and
+"Implementation difficulty" sections were merged into one "a required, back-to-back
+pair" section with the same ordering guarantee and REQUIRED wording as
+`PROMPT_TEMPLATE` now has. Fixing only `PROMPT_TEMPLATE` and leaving this file's
+own conflicting instructions in place would have left the default agent path
+still steering toward the same bug.
+
+**...and moved before the summary entirely, not just before Social Steps
+(2026-08-26, same-day, user feedback -- "im might be bettter to put those
+mandatory line first....before description").** The fix above still put both
+status lines *after* step 1 ("What this case is about"), just guaranteed to be
+immediately after it rather than possibly displaced by Social Steps. Moved one
+step further: both status lines are now the very first thing after the `# Case
+<code>` title, *before* the summary. Two motivations, not just user preference:
+it removes the last remaining way a line could get pushed down (a long case
+summary itself, independent of Social Steps), and claude already has the entire
+case brief/ADO detail/rubric in context before writing anything, so there's no
+real reason the summary needs to come first -- a "status line, then detail"
+shape is also just a more conventional document structure (front-matter before
+body). `PROMPT_TEMPLATE` renumbered so readiness/difficulty are steps 1-2 and
+"What this case is about" is step 3 (step 4 "Get set up" onward keep their
+numbers -- step 7's "PR against the branch/repo from step 4" reference needed no
+change). `case-guide-writer.md`'s merged section retitled "...a required,
+back-to-back pair, first" with the same "before the summary, not after it"
+instruction. `_insert_difficulty_rating`'s own splice logic (case-getter's
+retry-repair fallback) needed **no code change** -- it already inserts right
+after the title when no readiness marker is found, and right after the
+readiness line otherwise; both of those already match the new intended
+position, since the fallback was never actually anchored to the summary's
+position in the first place.
+
+**Difficulty rubric: added an explicit N/A band (2026-08-26, same-day
+follow-up, user feedback -- "claude doesnt distinguish auto generated
+notifications...they should have difficulty rating of N/A and be listed last").**
+See case-getter's own CLAUDE.md section ("Difficulty rubric gets an N/A band")
+for the full picture, including the case-getter-side consumption fix -- the
+generation-side fix lives here since case-guide is the actual source of the
+rating. Short version: `DIFFICULTY_RUBRIC` gained an `N/A` entry for a case with
+no dev work to size at all (an automated notification, pure triage/closure),
+explicitly distinct from "1"; `PROMPT_TEMPLATE`'s difficulty instruction now
+offers `N/A -- <short reason>` as an alternative to `X/10` and says not to force
+a non-dev-task case onto either end of the numeric scale; `_DIFFICULTY_RE`/
+`_DIFFICULTY_LINE_RE`/the retry prompt in `ensure_difficulty_rating` all
+recognize `N/A` as a complete rating. `case-guide-writer.md` had a line directly
+contradicting this ("a case being pure triage/closure with nothing to develop is
+itself ratable (typically at the low end)") -- likely a real contributor to the
+"1/10" half of the inconsistency the user reported, since it's the default
+agent; corrected to match.
 
 **Skip-if-unchanged:** if a guide already exists and is newer than its brief, `main`
 returns early instead of re-spending an ADO search + a `claude` call. No override
@@ -500,8 +624,47 @@ longer hides the rest of the relevant cases from the output — an already-curre
 case is free to include (a file read) so it's never counted against the limit;
 a new/stale case that *is* skipped for hitting the limit still shows up in the
 list with whatever's already on disk (nothing, for a case never processed
-before). `_tag` renders the three situations as ", stale" / ", up to date" /
-no suffix appended to the existing "mine"/"unassigned" ownership tag.
+before). `_status_label` renders the three situations as "Stale" / blank / blank —
+see "Owner as its own field, 'up to date' dropped" below for why the third one
+(genuinely up to date) is never shown as text at all.
+
+**"Up to date" means the guide actually has a usable difficulty rating, not
+just "the brief is current" (2026-08-26 bugfix, user-reported over two rounds --
+a real run kept showing several cases as "(not found -- check the guide)"). "Up
+to date" used to mean only `is_new`/`stale`, both purely about the *brief* (see
+`is_stale`). Two distinct ways a case's *guide* could be unusable while still
+passing that check, both fixed the same way, in `_needs_processing(c,
+guide_dir)`:**
+1. The guide file doesn't exist on disk at all yet -- e.g. a brief created by
+   hand outside case-getter, or left behind by a run whose case-guide call
+   failed (the checked-in demo case T2611845 was exactly this: a
+   `case-brief/briefs/brief-T2611845.md` from manual/demo use that was never run
+   through case-guide).
+2. The guide file exists, but claude dropped the `**Implementation
+   Difficulty:**` line entirely (see `_DIFFICULTY_RE`) -- a real guide that
+   genuinely has no difficulty to parse, confirmed against several real cases'
+   guides on disk (`grep -c difficulty` came back 0). The first fix (case 1
+   alone) left these still stuck forever: the guide file existed, so it read as
+   "done," even though there was nothing usable in it.
+`_needs_processing` now returns true for the existing `is_new`/`stale` reasons,
+*or*, independently, whenever `_extract_difficulty(_read(guide_path))` comes back
+`None` -- covering both a missing file (`_read` returns `None` for that) and an
+existing one with no parseable difficulty, in one check. Retried on *every* run
+until a difficulty line actually sticks -- there's no attempt limit; if a specific
+case's content makes claude reliably skip that line no matter how many tries,
+that will show up as the same case getting reprocessed every single run, which is
+the signal to go fix case-guide's own prompt/rubric for it, not something to
+silently cap or give up on here. `main`'s `to_process`/`--limit` accounting and
+its "already up to date, just read the files back" branch both switched from the
+bare `is_new or stale` check to this. Processing itself stays split in two:
+`needs_brief = is_new or stale` still gates whether `case_brief.py` gets
+(re)run -- a case that only needed a guide (either reason above) gets
+`case_guide.py` run directly, skipping a redundant CRM/ADO lookup for brief data
+that hasn't changed. (`_needs_processing`'s `guide_dir` parameter is passed
+explicitly at both `main` call sites, not left on the default -- a bare default
+bound at `def` time wouldn't see a test's `mock.patch.object(cg, "GUIDE_DIR",
+...)`, an existing gotcha `_case_to_row` also has; new code here avoids it rather
+than inheriting it silently.)
 
 **Sorted by difficulty by default (2026-08-26 addition).** `--sort` used to
 default to `"none"` (plain processing order) and only affected a full run, since
@@ -527,6 +690,176 @@ timestamp)` — `main` computes one `datetime.now()` per run and derives both th
 human-readable timestamp (in the file) and the filesystem-safe one (in the
 filename) from it, rather than calling `datetime.now()` twice and risking the two
 drifting apart across a slow run.
+
+**Owner as its own field, "up to date" dropped (2026-08-26, user feedback).** The
+console summary/`--dry-run` listing and the on-disk report used to render each case
+as a line like `- T2621277 (unassigned, up to date): <title> -- <customer>` —
+ownership and "was this (re)processed" folded into one combined tag string. Fixed
+two ways, both still true for both outputs:
+1. **Owner is its own field** (`_owner_label` — "Mine"/"Unassigned"), never folded
+   into a combined string with anything else.
+2. **"up to date" is never shown at all** (`_status_label`) — it's the default
+   expected state for every row in the list, not something worth calling out per
+   case; only "Stale" (a brief/guide that got reprocessed because the CRM record
+   changed) is ever shown as a status. `_tag`/`_ownership_tag` (the old
+   combined-string helpers) are gone, replaced by `_owner_label`/`_status_label`.
+
+**Table lives only in the on-disk report, not the terminal (2026-08-26, user
+feedback — first built as a table in both places, then corrected: "dont build the
+output in the cli....only in md").** The console (`print_summary`/the `--dry-run`
+listing, via `_format_case_lines`) stays plain indented text — one bullet per case,
+Owner/Status/Difficulty each their own labeled line, no pipes, no color — since a
+raw terminal can't reliably render a colored table across every user's setup, and
+literal `|` table syntax dumped into a terminal is exactly the noise the user didn't
+want there. The on-disk report (`build_report_markdown`) is where the actual table
+lives, via `_render_markdown_table`.
+
+**...and that table is an ordinary Markdown pipe table, not raw HTML (2026-08-26,
+user feedback, second correction — "are we not able to color cell backgrounds
+without doing the full html table? i dont like it").** First attempt
+(`_render_html_table`) rebuilt the whole table as raw `<table>`/`<tr>`/
+`<td style="...">` HTML embedded in the `.md` file, reasoning that a plain Markdown
+table can't carry a cell background at all. Corrected: GFM allows raw inline HTML
+*inside* a table cell, so the color doesn't need the whole table rebuilt as HTML —
+`_render_markdown_table` emits a completely normal `| Case | Owner | ... |` pipe
+table (same shape as every other table in this repo's docs) and reaches for HTML
+only where Markdown genuinely can't do the job:
+- the Difficulty cell wraps its text in a small inline
+  `<span style="background:{...};padding:1px 6px;border-radius:3px">` — the color
+  itself still needs CSS, but it's one span inside one cell of an otherwise
+  ordinary row, not a structurally different table.
+- a case the signed-in user already owns gets its Owner cell rendered as plain
+  Markdown `**Mine**` (bold) instead of a full-row HTML background — this needs no
+  HTML at all, and degrades to completely ordinary Markdown everywhere.
+`_difficulty_bg`'s red-yellow-green scale is still the same three color stops —
+#63BE7B/#FFEB84/#F8696B — as Excel's default conditional-formatting scale for a
+1-10 score, not an invented palette. `_md_cell` HTML-escapes every cell's text
+(a case title/customer/error string is free-text from CRM/claude, not trusted
+markup — GFM would otherwise parse a stray `<`/`&` as a tag/entity) and also
+escapes a literal `|` so it can't be mistaken for a column separator and break the
+row. A viewer that renders embedded HTML (VS Code's own Markdown preview does)
+shows the difficulty color; any other viewer still reads the exact same table as
+plain, ungarbled Markdown, just without that one span's color. (Both HTML
+directions tried first — `_render_html_table`/`_MINE_ROW_BG`, and before that the
+colorized-ANSI-terminal version, `_render_console_table`/`_console_table`/
+`_enable_ansi_colors`/`_ANSI_MINE` — were removed outright per these corrections,
+not kept as second paths.)
+
+**Difficulty placeholder explains itself (2026-08-26, user feedback — "what does
+this mean? ... why did it not get briefed and guided?").** A case with no
+difficulty yet used to show one generic string ("not yet available") in every
+situation, which doesn't actually say why. `_difficulty_placeholder` picks among
+four concrete reasons instead: a `--dry-run` listing (nothing was ever going to be
+(re)generated this run); a case `main` skipped because `--limit` was reached first
+(tagged `row["skipped_limit"] = True` in the loop) — points at raising `--limit`;
+a row that already has an `error` on it (case-brief/case-guide failed) — shown
+directly (see "Status/Notes columns dropped" just below for why it's not a
+separate column any more); otherwise, a guide really was generated but claude
+either dropped the difficulty line or phrased it in a way `_DIFFICULTY_RE` didn't
+recognize — worth a look at the guide itself. Both `_table_rows` (the report) and
+`_format_case_lines` (the console) call this same function, so the two outputs
+never explain a missing difficulty differently.
+
+**Status/Notes columns dropped (2026-08-26, user feedback — "remove status
+column, its always empty" / "also notes").** Both columns existed for genuinely
+rare situations (Status: only ever "Stale", and rarely; Notes: only an error,
+which itself is rare since most runs succeed) — in practice both sat empty for
+nearly every row, in both the table (`_TABLE_HEADERS`) and the console
+(`_format_case_lines`). Dropped outright rather than kept for the rare case that
+needed them:
+- **Status** (`_status_label`, "Stale"/blank) is gone with no replacement --
+  `stale`/`is_new` still drive real processing decisions internally (see
+  `_needs_processing`), they're just not rendered as their own column/line any
+  more. This is the same call already made for "up to date" (never shown at all,
+  see above) taken one step further for "Stale," which was rare enough to follow
+  the same reasoning.
+- **Notes** (the `⚠ {error}` cell) is gone, but an error itself is too important
+  to drop silently -- it now shows up as the Difficulty cell/line's own text
+  instead of a separate column (`_difficulty_placeholder`'s error branch returns
+  `f"⚠ {error}"` directly, rather than the old "(not available -- see Notes)"
+  pointer to a column that no longer exists). `_TABLE_HEADERS` is now just
+  `["Case", "Owner", "Title", "Customer", "Difficulty"]`; `_table_rows`/
+  `_format_case_lines` both dropped their Status/Notes cells to match.
+
+**Difficulty rubric gets an N/A band (2026-08-26, user feedback — "claude doesnt
+distinguish auto generated notifications...they should have difficulty rating of
+N/A and be listed last....now its either 1/10 or 9/10 for stuff like this," citing
+real BC "environment updated"/"update scheduled" notification e-mails that
+generated cases with no actual ask in them).** A case that's an automated/
+informational notification or pure CRM triage/closure has no dev work to size at
+all -- forcing it onto a 1-10 scale produced exactly the inconsistency the user
+saw: the same *kind* of case landing on "1" (trivial, no code) in one guide and
+"9" (underspecified, unclear if code's needed) in another, both really saying
+"there's nothing to develop here," just phrased as opposite ends of a scale that
+doesn't apply. Fixed in case-guide (the actual source of the rating), not
+case-getter -- case-getter's own display fix (below) only mattered once a real N/A
+rating could exist to display. `DIFFICULTY_RUBRIC` gained an explicit `N/A` entry,
+distinct from "1" ("N/A means there is nothing to rate on a dev-effort scale at
+all," not "still a real, tiny task"); `PROMPT_TEMPLATE`'s difficulty instruction
+now explicitly offers `**Implementation Difficulty:** N/A -- <short reason>` as an
+alternative to `X/10` and says plainly not to force a non-dev-task case into "1"
+or "9"/"10". `case-guide-writer.md` (the default agent persona) had a line
+actively telling claude the opposite -- "a case being pure triage/closure with
+nothing to develop is itself ratable (typically at the low end)" -- which is
+likely a real contributor to the "1/10" half of the inconsistency the user saw;
+fixed to match the corrected guidance. `_DIFFICULTY_RE`/`_DIFFICULTY_LINE_RE`/
+`ensure_difficulty_rating`'s retry prompt all updated to recognize `N/A` as a
+complete, valid rating alongside `X/10` -- not doing this would have silently
+broken the missing-difficulty retry (`_has_difficulty_rating` would see "N/A" as
+*no* rating and `ensure_difficulty_rating` would keep splicing a second,
+conflicting line into an already-correct guide).
+
+case-getter's own `_DIFFICULTY_RE` (an independent copy that reads the rendered
+guide back off disk, not the one above) needed the matching update, and this one
+carried real consequences beyond display: `_needs_processing` calls
+`_extract_difficulty(...) is None` to decide whether a case still needs
+(re)processing (see its own section above) -- before this fix, an N/A-rated guide
+would have looked exactly like a *missing* rating and gotten reprocessed on every
+single run forever, the same infinite-retry bug already fixed once for a guide
+missing its difficulty line entirely, silently reintroduced for a legitimate N/A
+one. `_difficulty_num` needed no change -- it already returns `None` for any
+string not shaped like a leading `X/10` (including `"N/A -- ..."`), and
+`sort_rows` already sorts `None`-difficulty rows last regardless of direction --
+so "N/A sorts last" fell out of the existing sort logic for free, once N/A could
+be told apart from "not rated yet" at all. `_difficulty_bg` also needed no
+change -- `None` already means "no heatmap color," which is the correct, distinct
+treatment for an N/A cell vs. a real 1-10 score.
+
+**Case number links to its own CRM record (2026-08-26, user feedback -- "case
+code in our get md should be a clickable CRM link").** The report's Case cell
+used to be plain text, even though the deep link into the CRM UI was already
+sitting right there on every case: `crm_scrape.list_new_cases` (the listing query
+`find_relevant_cases` is built on) already builds one per case -- the same
+`CRM_APP_ID`/`forceUCI` deep link case-brief's own "Case link" uses, not
+something case-getter needed to construct itself. Just needed to be carried
+through and rendered: the `row["url"]` field is now set from `c.get("url")` at
+both places a row gets built (`main`'s per-case loop, `_case_to_row` for the
+`--dry-run` listing) and threaded through to `_render_markdown_table` as a new
+parallel `urls` list (same pattern as `mine_flags`/`difficulty_nums`), which
+wraps the Case cell as `[T2621277](url)` when a URL is present, plain text
+otherwise (a case with no `incidentid` back at the CRM layer, or an older code
+path -- see `crm_scrape.list_new_cases`'s own `url` field). Only the visible
+label goes through `_md_cell`'s escaping -- the URL itself is placed raw inside
+the link's `(...)`, since CommonMark doesn't require escaping `&` there the way
+a table cell's own text does, and escaping it would have corrupted the query
+string (a real CRM URL always has several `&`-separated params). Console output
+(`_format_case_lines`) deliberately untouched -- a link is a report-file (the
+"md" the user asked for), not a plain-text terminal, concept.
+
+**Em dash separator was getting doubled (2026-08-26 bugfix, user-spotted: "4/10
+-- — single file..." -- "why the -- — part? makes no sense").** `_extract_difficulty`
+reassembles the difficulty string it reads back off a guide as `f"{rating}" + f"
+-- {reason}"` -- its own hardcoded `" -- "` separator, expecting `_DIFFICULTY_RE`'s
+`(?:-{1,2}\s*)?` group to have already consumed whatever separator claude
+actually wrote between the rating and the reason. That group only matched ASCII
+hyphens, but claude's prose defaults to a real em dash ("4/10 — reason") often
+enough that it routinely didn't match at all -- the em dash then fell into the
+reason capture *un-consumed*, and got reassembled as `"4/10 -- — reason"`: this
+function's own separator, immediately followed by claude's own un-stripped one.
+`.strip()` doesn't remove it either -- an em dash isn't whitespace. Fixed by
+widening the character class to `[-–—]{1,2}` (ASCII hyphen, en dash U+2013, em
+dash U+2014), so any of the three gets consumed as the separator and never
+doubles up, regardless of which one claude happens to write for a given guide.
 
 ## case-solve
 
